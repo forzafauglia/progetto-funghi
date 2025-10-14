@@ -29,18 +29,29 @@ def extract_raster_data(raster_path, center_lon, center_lat, size_m=10000):
     """Estrae un'area quadrata di dati da un file raster GeoTIFF."""
     try:
         with rasterio.open(raster_path) as src:
-            # Crea un trasformatore da WGS84 (lat/lon) al CRS del raster
-            transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
-            center_x, center_y = transformer.transform(center_lon, center_lat)
+            # --- MODIFICA CHIAVE: SE IL CRS E' GIA' 4326, NON TRASFORMIAMO ---
+            if src.crs.to_epsg() == 4326:
+                # Calcoliamo l'ampiezza in gradi (approssimazione)
+                # 1 grado di latitudine ~ 111 km. 1 grado di longitudine ~ 111km * cos(lat)
+                deg_per_meter_lat = 1 / 111320
+                deg_per_meter_lon = 1 / (111320 * np.cos(np.radians(center_lat)))
+                
+                half_size_deg_lon = (size_m / 2) * deg_per_meter_lon
+                half_size_deg_lat = (size_m / 2) * deg_per_meter_lat
 
-            # Calcola i confini della bounding box (10x10 km)
-            half_size = size_m / 2
-            bounds = (center_x - half_size, center_y - half_size, center_x + half_size, center_y + half_size)
+                bounds = (
+                    center_lon - half_size_deg_lon, 
+                    center_lat - half_size_deg_lat, 
+                    center_lon + half_size_deg_lon, 
+                    center_lat + half_size_deg_lat
+                )
+            else: # Manteniamo la vecchia logica per TIF in altri CRS
+                transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
+                center_x, center_y = transformer.transform(center_lon, center_lat)
+                half_size = size_m / 2
+                bounds = (center_x - half_size, center_y - half_size, center_x + half_size, center_y + half_size)
 
-            # Ottieni la finestra di dati corrispondente ai confini
             window = from_bounds(*bounds, src.transform)
-            
-            # Leggi i dati e ottieni il transform specifico della finestra
             data = src.read(1, window=window)
             window_transform = src.window_transform(window)
             return data, window_transform, src.crs
@@ -77,16 +88,14 @@ def degrees_to_cardinal(d):
     return dirs[ix % len(dirs)]
 
 def create_pydeck_map(station_data, df_latest_station):
-    """Crea e visualizza la mappa 3D interattiva con Pydeck."""
+    # ... Tutta la parte iniziale di estrazione di altitudine e temperatura rimane IDENTICA ...
     st.subheader("🛰️ Analisi Microclimatica 3D del Territorio")
     st.info("Passa il mouse sulla mappa per esplorare. I dati vengono calcolati per un'area di 10x10 km intorno alla stazione.")
-
-    # ... (tutta la parte di estrazione di altitudine e temperatura rimane uguale)
     station_lon = station_data['LONGITUDINE'].iloc[0]
     station_lat = station_data['LATITUDINE'].iloc[0]
     station_name = station_data['STAZIONE'].iloc[0]
-
-    station_alt = None
+    station_alt = None; 
+    # (codice per trovare station_alt e latest_temp che hai già)
     if 'LEGENDA_ALTITUDINE' in df_latest_station.columns and not df_latest_station.empty:
         alt_val = df_latest_station['LEGENDA_ALTITUDINE'].iloc[0]
         if pd.notna(alt_val): station_alt = float(alt_val)
@@ -106,40 +115,25 @@ def create_pydeck_map(station_data, df_latest_station):
         dem_data, dem_transform, raster_crs = extract_raster_data(DEM_PATH, station_lon, station_lat)
         aspect_data, _, _ = extract_raster_data(ASPECT_PATH, station_lon, station_lat)
 
-    if dem_data is None or aspect_data is None:
-        return
+    if dem_data is None or aspect_data is None: return
 
     h, w = dem_data.shape
     map_data = []
-    
     step = 10 
-    
-    # --- INIZIO BLOCCO CORRETTO PER LA TRASFORMAZIONE ---
-    # Definiamo esplicitamente i sistemi di coordinate
-    crs_from = raster_crs
-    crs_to = "EPSG:4326"  # WGS 84 (Lat/Lon)
-    
-    # Creiamo il trasformatore
-    transformer = Transformer.from_crs(crs_from, crs_to, always_xy=True)
-    # --- FINE BLOCCO CORRETTO ---
 
     for r in range(0, h, step):
         for c in range(0, w, step):
-            if dem_data[r, c] < -9000: continue # Valore NoData comune per i DEM
+            if dem_data[r, c] < -9000: continue
 
-            # Calcola le coordinate x, y del pixel nel CRS del raster
-            x, y = dem_transform * (c + 0.5, r + 0.5) # Usiamo il centro del pixel
+            # --- MODIFICA CHIAVE: NON TRASFORMIAMO PIU' SE IL CRS E' 4326 ---
+            # Le coordinate che otteniamo da dem_transform sono GIA' lon e lat!
+            lon, lat = dem_transform * (c + 0.5, r + 0.5)
             
-            # Trasforma le coordinate da CRS raster a Lat/Lon
-            lon, lat = transformer.transform(x, y)
-            
-            # Controllo di validità sulla conversione
-            if not (-180 <= lon <= 180 and -90 <= lat <= 90):
-                continue # Salta questo punto se la conversione ha prodotto valori non validi
+            # Controllo di validità rimane utile
+            if not (-180 <= lon <= 180 and -90 <= lat <= 90): continue
             
             alt = dem_data[r, c]
-            aspect = aspect_data[r, c] if aspect_data is not None and aspect_data.shape == dem_data.shape else -1 # Gestione sicura di aspect
-            
+            aspect = aspect_data[r, c] if aspect_data is not None and aspect_data.shape == dem_data.shape else -1
             temp_est = estimate_temperature(latest_temp, station_alt, alt, aspect)
             
             if temp_est is not None:
@@ -149,17 +143,17 @@ def create_pydeck_map(station_data, df_latest_station):
                     "temp_est": temp_est
                 })
 
-    # Righe di debug (lasciamole per ora)
     if not map_data:
         st.warning("Nessun dato valido trovato nell'area della stazione per generare la mappa 3D.")
         st.write(f"Informazioni tecniche: CRS del raster: {raster_crs}")
         return
         
     df_map = pd.DataFrame(map_data)
-    st.write("Dati processati per la mappa 3D (prime 5 righe):")
-    st.dataframe(df_map.head())
+    # Rimuoviamo o commentiamo il debug per pulizia
+    # st.write("Dati processati per la mappa 3D (prime 5 righe):")
+    # st.dataframe(df_map.head())
 
-    # ... il resto della funzione (da "view_state = pdk.ViewState" in poi) rimane identico ...
+    # Il resto della funzione rimane IDENTICO
     view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
     layer = pdk.Layer(
         "GridCellLayer", data=df_map, get_position=["lon", "lat"], get_elevation="altitude",
