@@ -81,39 +81,27 @@ def create_pydeck_map(station_data, df_latest_station):
     st.subheader("🛰️ Analisi Microclimatica 3D del Territorio")
     st.info("Passa il mouse sulla mappa per esplorare. I dati vengono calcolati per un'area di 10x10 km intorno alla stazione.")
 
-    # Estrai dati base della stazione
+    # ... (tutta la parte di estrazione di altitudine e temperatura rimane uguale)
     station_lon = station_data['LONGITUDINE'].iloc[0]
     station_lat = station_data['LATITUDINE'].iloc[0]
     station_name = station_data['STAZIONE'].iloc[0]
 
-    # --- BLOCCO DEFINITIVO PER L'ALTITUDINE E TEMPERATURA ---
     station_alt = None
-
-    # Strategia 1: Cerca LEGENDA_ALTITUDINE nell'ultimo dato disponibile
     if 'LEGENDA_ALTITUDINE' in df_latest_station.columns and not df_latest_station.empty:
         alt_val = df_latest_station['LEGENDA_ALTITUDINE'].iloc[0]
-        if pd.notna(alt_val):
-            station_alt = float(alt_val)
-
-    # Strategia 2 (Piano B): Cerca in QUOTA_M_SLM (la vecchia colonna D)
+        if pd.notna(alt_val): station_alt = float(alt_val)
     if station_alt is None and 'QUOTA_M_SLM' in station_data.columns:
         first_valid_idx = station_data['QUOTA_M_SLM'].first_valid_index()
-        if first_valid_idx is not None:
-            station_alt = float(station_data['QUOTA_M_SLM'].loc[first_valid_idx])
-
-    # Strategia 3 (Piano C): Default
+        if first_valid_idx is not None: station_alt = float(station_data['QUOTA_M_SLM'].loc[first_valid_idx])
     if station_alt is None:
         st.warning(f"Attenzione: Non è stato possibile trovare un valore di altitudine per la stazione {station_name}. Uso un valore di default di 500m.")
         station_alt = 500.0
-
-    # Controllo robusto sulla temperatura
     if not df_latest_station.empty and 'TEMPERATURA_MEDIANA' in df_latest_station and pd.notna(df_latest_station['TEMPERATURA_MEDIANA'].iloc[0]):
         latest_temp = df_latest_station['TEMPERATURA_MEDIANA'].iloc[0]
     else:
         st.warning(f"Attenzione: Temperatura dell'ultimo giorno non disponibile per la stazione {station_name}. Uso un valore di default di 15°C.")
         latest_temp = 15.0
     
-    # --- QUESTA PARTE ORA E' AL POSTO GIUSTO ---
     with st.spinner("Sto generando il modello 3D del terreno... potrebbe richiedere qualche secondo."):
         dem_data, dem_transform, raster_crs = extract_raster_data(DEM_PATH, station_lon, station_lat)
         aspect_data, _, _ = extract_raster_data(ASPECT_PATH, station_lon, station_lat)
@@ -124,20 +112,33 @@ def create_pydeck_map(station_data, df_latest_station):
     h, w = dem_data.shape
     map_data = []
     
-    # Downsampling per performance: analizza un punto ogni N pixel
     step = 10 
     
-    transformer_to_wgs84 = Transformer.from_crs(raster_crs, "EPSG:4326", always_xy=True)
+    # --- INIZIO BLOCCO CORRETTO PER LA TRASFORMAZIONE ---
+    # Definiamo esplicitamente i sistemi di coordinate
+    crs_from = raster_crs
+    crs_to = "EPSG:4326"  # WGS 84 (Lat/Lon)
+    
+    # Creiamo il trasformatore
+    transformer = Transformer.from_crs(crs_from, crs_to, always_xy=True)
+    # --- FINE BLOCCO CORRETTO ---
 
     for r in range(0, h, step):
         for c in range(0, w, step):
-            if dem_data[r, c] < 0: continue # Salta i dati non validi (es. -9999)
+            if dem_data[r, c] < -9000: continue # Valore NoData comune per i DEM
 
-            x, y = dem_transform * (c, r)
-            lon, lat = transformer_to_wgs84.transform(x, y)
+            # Calcola le coordinate x, y del pixel nel CRS del raster
+            x, y = dem_transform * (c + 0.5, r + 0.5) # Usiamo il centro del pixel
+            
+            # Trasforma le coordinate da CRS raster a Lat/Lon
+            lon, lat = transformer.transform(x, y)
+            
+            # Controllo di validità sulla conversione
+            if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+                continue # Salta questo punto se la conversione ha prodotto valori non validi
             
             alt = dem_data[r, c]
-            aspect = aspect_data[r, c]
+            aspect = aspect_data[r, c] if aspect_data is not None and aspect_data.shape == dem_data.shape else -1 # Gestione sicura di aspect
             
             temp_est = estimate_temperature(latest_temp, station_alt, alt, aspect)
             
@@ -148,47 +149,27 @@ def create_pydeck_map(station_data, df_latest_station):
                     "temp_est": temp_est
                 })
 
+    # Righe di debug (lasciamole per ora)
     if not map_data:
         st.warning("Nessun dato valido trovato nell'area della stazione per generare la mappa 3D.")
+        st.write(f"Informazioni tecniche: CRS del raster: {raster_crs}")
         return
-
+        
     df_map = pd.DataFrame(map_data)
-    if not map_data:
-        st.warning("Nessun dato valido trovato nell'area della stazione per generare la mappa 3D.")
-        return
-
-    df_map = pd.DataFrame(map_data)
-    
-    # --- RIGHE DI DEBUG DA AGGIUNGERE ---
     st.write("Dati processati per la mappa 3D (prime 5 righe):")
     st.dataframe(df_map.head())
-    # --- FINE RIGHE DI DEBUG ---
 
-    # Impostazioni per Pydeck
+    # ... il resto della funzione (da "view_state = pdk.ViewState" in poi) rimane identico ...
     view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
-    
     layer = pdk.Layer(
-        "GridCellLayer",
-        data=df_map,
-        get_position=["lon", "lat"],
-        get_elevation="altitude",
-        get_fill_color="[255, (1 - (temp_est - 5) / 25) * 255, 0, 180]", # Colora da blu (freddo) a rosso (caldo)
-        elevation_scale=1,
-        cell_size=100, # Dimensione cella in metri
-        pickable=True,
-        extruded=True,
+        "GridCellLayer", data=df_map, get_position=["lon", "lat"], get_elevation="altitude",
+        get_fill_color="[255, (1 - (temp_est - 5) / 25) * 255, 0, 180]", elevation_scale=1,
+        cell_size=100, pickable=True, extruded=True,
     )
-
     tooltip = {
-        "html": """
-        <b>Dati Stimati del Punto:</b><br/>
-        Altitudine: {altitude:.0f} m<br/>
-        Esposizione: {aspect_str}<br/>
-        Temperatura Stimata: {temp_est:.1f} °C
-        """,
+        "html": "<b>Dati Stimati del Punto:</b><br/>Altitudine: {altitude:.0f} m<br/>Esposizione: {aspect_str}<br/>Temperatura Stimata: {temp_est:.1f} °C",
         "style": {"backgroundColor": "steelblue", "color": "white", "font-family": "Arial", "z-index": "10000"}
     }
-
     deck = pdk.Deck(layers=[layer], initial_view_state=view_state, map_style="mapbox://styles/mapbox/satellite-streets-v11", tooltip=tooltip)
     st.pydeck_chart(deck)
     st.caption(f"Simulazione basata sui dati dell'ultimo giorno disponibile: {latest_temp:.1f}°C a {station_alt:.0f}m (Stazione di {station_data['STAZIONE'].iloc[0]}).")
