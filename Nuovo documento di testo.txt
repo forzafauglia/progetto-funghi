@@ -1,1 +1,0 @@
-streamlit run C:\Users\afantei\Desktop\ProgettoFunghi\dati_gis\app_3d.py
