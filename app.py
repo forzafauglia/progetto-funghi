@@ -10,6 +10,148 @@ import re
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from branca.colormap import linear
+# --- 1.5. NUOVI IMPORT PER ANALISI GEOSPAZIALE 3D ---
+import rasterio
+from rasterio.windows import from_bounds
+import pydeck as pdk
+from pyproj import Proj, Transformer
+import os
+
+# --- 2.5. NUOVE FUNZIONI PER ANALISI MICROCLIMATICA 3D ---
+DEM_PATH = os.path.join("data", "dem_toscana.tif")
+ASPECT_PATH = os.path.join("data", "aspect_toscana.tif")
+
+@st.cache_data(ttl=86400) # Cache per 24 ore
+def extract_raster_data(raster_path, center_lon, center_lat, size_m=10000):
+    """Estrae un'area quadrata di dati da un file raster GeoTIFF."""
+    try:
+        with rasterio.open(raster_path) as src:
+            # Crea un trasformatore da WGS84 (lat/lon) al CRS del raster
+            transformer = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
+            center_x, center_y = transformer.transform(center_lon, center_lat)
+
+            # Calcola i confini della bounding box (10x10 km)
+            half_size = size_m / 2
+            bounds = (center_x - half_size, center_y - half_size, center_x + half_size, center_y + half_size)
+
+            # Ottieni la finestra di dati corrispondente ai confini
+            window = from_bounds(*bounds, src.transform)
+            
+            # Leggi i dati e ottieni il transform specifico della finestra
+            data = src.read(1, window=window)
+            window_transform = src.window_transform(window)
+            return data, window_transform, src.crs
+    except FileNotFoundError:
+        st.error(f"ERRORE CRITICO: File non trovato in '{raster_path}'. Assicurati che il file esista nella sottocartella 'data'.")
+        return None, None, None
+    except Exception as e:
+        st.error(f"Errore durante l'elaborazione del file raster {os.path.basename(raster_path)}: {e}")
+        return None, None, None
+
+def estimate_temperature(base_temp, base_alt, target_alt, aspect_degrees):
+    """Stima la temperatura in un punto basandosi su altitudine e esposizione."""
+    if base_temp is None or base_alt is None or target_alt is None or aspect_degrees is None or target_alt < -100:
+        return None
+
+    # 1. Correzione per l'altitudine (gradiente termico verticale standard: -0.65°C ogni 100m)
+    altitude_diff = target_alt - base_alt
+    temp_correction_alt = (altitude_diff / 100) * 0.65
+    estimated_temp = base_temp - temp_correction_alt
+
+    # 2. Correzione euristica per l'esposizione (semplificata)
+    if 315 < aspect_degrees <= 360 or 0 <= aspect_degrees <= 45:  # Nord
+        estimated_temp -= 1.0
+    elif 135 < aspect_degrees <= 225:  # Sud
+        estimated_temp += 1.0
+    
+    return estimated_temp
+
+def degrees_to_cardinal(d):
+    """Converte i gradi di esposizione in punti cardinali."""
+    if d is None or d < 0: return "N/D"
+    dirs = ["N", "N-NE", "NE", "E-NE", "E", "E-SE", "SE", "S-SE", "S", "S-SW", "SW", "W-SW", "W", "W-NW", "NW", "N-NW"]
+    ix = round(d / (360. / len(dirs)))
+    return dirs[ix % len(dirs)]
+
+def create_pydeck_map(station_data, df_latest_station):
+    """Crea e visualizza la mappa 3D interattiva con Pydeck."""
+    st.subheader("🛰️ Analisi Microclimatica 3D del Territorio")
+    st.info("Passa il mouse sulla mappa per esplorare. I dati vengono calcolati per un'area di 10x10 km intorno alla stazione.")
+
+    # Estrai dati base della stazione
+    station_lon = station_data['LONGITUDINE'].iloc[0]
+    station_lat = station_data['LATITUDINE'].iloc[0]
+    station_alt = station_data['LEGENDA_ALTITUDINE'].iloc[0] if 'LEGENDA_ALTITUDINE' in station_data else 500 # Default se manca
+    latest_temp = df_latest_station['TEMPERATURA_MEDIANA'].iloc[0] if not df_latest_station.empty else 15 # Default se manca
+
+    with st.spinner("Sto generando il modello 3D del terreno... potrebbe richiedere qualche secondo."):
+        dem_data, dem_transform, raster_crs = extract_raster_data(DEM_PATH, station_lon, station_lat)
+        aspect_data, _, _ = extract_raster_data(ASPECT_PATH, station_lon, station_lat)
+
+    if dem_data is None or aspect_data is None:
+        return
+
+    h, w = dem_data.shape
+    map_data = []
+    
+    # Downsampling per performance: analizza un punto ogni N pixel
+    step = 10 
+    
+    transformer_to_wgs84 = Transformer.from_crs(raster_crs, "EPSG:4326", always_xy=True)
+
+    for r in range(0, h, step):
+        for c in range(0, w, step):
+            if dem_data[r, c] < 0: continue # Salta i dati non validi (es. -9999)
+
+            x, y = dem_transform * (c, r)
+            lon, lat = transformer_to_wgs84.transform(x, y)
+            
+            alt = dem_data[r, c]
+            aspect = aspect_data[r, c]
+            
+            temp_est = estimate_temperature(latest_temp, station_alt, alt, aspect)
+            
+            if temp_est is not None:
+                map_data.append({
+                    "lon": lon, "lat": lat, "altitude": alt,
+                    "aspect_str": degrees_to_cardinal(aspect),
+                    "temp_est": temp_est
+                })
+
+    if not map_data:
+        st.warning("Nessun dato valido trovato nell'area della stazione per generare la mappa 3D.")
+        return
+
+    df_map = pd.DataFrame(map_data)
+
+    # Impostazioni per Pydeck
+    view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
+    
+    layer = pdk.Layer(
+        "GridCellLayer",
+        data=df_map,
+        get_position=["lon", "lat"],
+        get_elevation="altitude",
+        get_fill_color="[255, (1 - (temp_est - 5) / 25) * 255, 0, 180]", # Colora da blu (freddo) a rosso (caldo)
+        elevation_scale=1,
+        cell_size=100, # Dimensione cella in metri
+        pickable=True,
+        extruded=True,
+    )
+
+    tooltip = {
+        "html": """
+        <b>Dati Stimati del Punto:</b><br/>
+        Altitudine: {altitude:.0f} m<br/>
+        Esposizione: {aspect_str}<br/>
+        Temperatura Stimata: {temp_est:.1f} °C
+        """,
+        "style": {"backgroundColor": "steelblue", "color": "white", "font-family": "Arial", "z-index": "10000"}
+    }
+
+    deck = pdk.Deck(layers=[layer], initial_view_state=view_state, map_style="mapbox://styles/mapbox/satellite-streets-v11", tooltip=tooltip)
+    st.pydeck_chart(deck)
+    st.caption(f"Simulazione basata sui dati dell'ultimo giorno disponibile: {latest_temp:.1f}°C a {station_alt:.0f}m (Stazione di {station_data['STAZIONE'].iloc[0]}).")
 
 # --- 2. CONFIGURAZIONE CENTRALE E FUNZIONI DI BASE ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRxitMYpUqvX6bxVaukG01lJDC8SUfXtr47Zv5ekR1IzfR1jmhUilBsxZPJ8hrktVHrBh6hUUWYUtox/pub?output=csv"
@@ -263,8 +405,6 @@ def add_sbalzo_line(fig, df_data, sbalzo_col_name, label):
                 fig.add_annotation(x=sbalzo_date, y=1.05, xref="x", yref="paper", text=f"{label} ({sbalzo_val})", showarrow=False, xanchor="left", font=dict(family="Arial", size=12, color="black"))
             except ValueError: continue
 
-# SOSTITUISCI L'INTERA FUNZIONE display_station_detail CON QUESTA
-
 def display_station_detail(df, station_name):
     if st.button("⬅️ Torna alla Mappa Riepilogativa"): 
         st.query_params.clear()
@@ -275,6 +415,20 @@ def display_station_detail(df, station_name):
     if df_station.empty: 
         st.error("Dati non trovati per la stazione selezionata.")
         return
+        
+    # Ottieni l'ultimo dato disponibile per la stazione per la simulazione
+    df_latest_station = df_station[df_station['DATA'] == df_station['DATA'].max()]
+
+    # --- INIZIO NUOVA SEZIONE: ANALISI 3D ---
+    with st.expander("🔬 Apri l'Analisi Microclimatica 3D del Territorio"):
+        if st.button("🚀 Avvia Simulazione 3D", key="start_3d_sim"):
+            # Verifica che i file TIF esistano prima di procedere
+            if os.path.exists(DEM_PATH) and os.path.exists(ASPECT_PATH):
+                create_pydeck_map(df_station, df_latest_station)
+            else:
+                st.error("File di dati geografici non trovati. Assicurati che 'dem_toscana.tif' e 'aspect_toscana.tif' siano nella cartella 'data'.")
+    # --- FINE NUOVA SEZIONE: ANALISI 3D ---
+
 
     # Impostazioni dei grafici
     if not df_station.empty: 
@@ -327,24 +481,10 @@ def display_station_detail(df, station_name):
         
         # Lista delle colonne di default con i nuovi nomi corretti e nell'ordine desiderato
         defaults = [
-            'DATA',
-            'STAZIONE',
-            'TOTALE_PIOGGIA_GIORNO',
-            'PIOGGE_RESIDUA_ZOFFOLI',
-            'TEMPERATURA_MEDIANA',
-            'TEMPERATURA_MEDIANA_MINIMA',
-            'SBALZO_TERMICO',
-            'UMIDITA_DEL_GIORNO',
-            'UMIDITA_MEDIA_7GG',
-            'VENTO',
-            'SBALZO_TERMICO_MIGLIORE',
-            'PORCINI_CALDO_NOTE',
-            'DURATA_RANGE_CALDO',
-            'CONTEGGIO_GG_RACCOLTA_CALDO',
-            'PORCINI_FREDDO_NOTE',
-            'DURATA_RANGE_FREDDO',
-            'BOOST',
-            'CONTEGGIO_GG_RACCOLTA_FREDDO'
+            'DATA', 'STAZIONE', 'TOTALE_PIOGGIA_GIORNO', 'PIOGGE_RESIDUA_ZOFFOLI', 'TEMPERATURA_MEDIANA',
+            'TEMPERATURA_MEDIANA_MINIMA', 'SBALZO_TERMICO', 'UMIDITA_DEL_GIORNO', 'UMIDITA_MEDIA_7GG', 'VENTO',
+            'SBALZO_TERMICO_MIGLIORE', 'PORCINI_CALDO_NOTE', 'DURATA_RANGE_CALDO', 'CONTEGGIO_GG_RACCOLTA_CALDO',
+            'PORCINI_FREDDO_NOTE', 'DURATA_RANGE_FREDDO', 'BOOST', 'CONTEGGIO_GG_RACCOLTA_FREDDO'
         ]
         
         sel_cols = st.multiselect(
@@ -354,13 +494,8 @@ def display_station_detail(df, station_name):
         )
         
         if sel_cols:
-            # Ordina il dataframe per data (più recente in alto)
             display_df = df_station[sel_cols].sort_values('DATA', ascending=False)
-            
-            # Riordina le colonne per rispettare il tuo ordine personalizzato
             ordered_cols = [col for col in defaults if col in sel_cols]
-            
-            # Aggiungi le altre colonne selezionate dall'utente che non erano nei default
             for col in sel_cols:
                 if col not in ordered_cols:
                     ordered_cols.append(col)
@@ -369,6 +504,8 @@ def display_station_detail(df, station_name):
             st.dataframe(display_df[ordered_cols])
         else:
             st.info("Seleziona almeno una colonna.")
+
+
 
 
 def main():
