@@ -1,4 +1,6 @@
 streamlit
-rasterio
-pydeck
-streamlit-deckgl
+pandas
+numpy
+plotly
+folium>=0.14.0
+streamlit-folium
