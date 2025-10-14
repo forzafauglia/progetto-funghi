@@ -17,6 +17,9 @@ import pydeck as pdk
 from pyproj import Proj, Transformer
 import os
 
+# --- 2. CONFIGURAZIONE CENTRALE E FUNZIONI DI BASE ---
+SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRxitMYpUqvX6bxVaukG01lJDC8SUfXtr47Zv5ekR1IzfR1jmhUilBsxZPJ8hrktVHrBh6hUUWYUtox/pub?output=csv"
+
 # --- 2.5. NUOVE FUNZIONI PER ANALISI MICROCLIMATICA 3D ---
 DEM_PATH = os.path.join("data", "dem_toscana.tif")
 ASPECT_PATH = os.path.join("data", "aspect_toscana.tif")
@@ -81,9 +84,36 @@ def create_pydeck_map(station_data, df_latest_station):
     # Estrai dati base della stazione
     station_lon = station_data['LONGITUDINE'].iloc[0]
     station_lat = station_data['LATITUDINE'].iloc[0]
-    station_alt = station_data['LEGENDA_ALTITUDINE'].iloc[0] if 'LEGENDA_ALTITUDINE' in station_data else 500 # Default se manca
-    latest_temp = df_latest_station['TEMPERATURA_MEDIANA'].iloc[0] if not df_latest_station.empty else 15 # Default se manca
+    station_name = station_data['STAZIONE'].iloc[0]
 
+    # --- BLOCCO DEFINITIVO PER L'ALTITUDINE E TEMPERATURA ---
+    station_alt = None
+
+    # Strategia 1: Cerca LEGENDA_ALTITUDINE nell'ultimo dato disponibile
+    if 'LEGENDA_ALTITUDINE' in df_latest_station.columns and not df_latest_station.empty:
+        alt_val = df_latest_station['LEGENDA_ALTITUDINE'].iloc[0]
+        if pd.notna(alt_val):
+            station_alt = float(alt_val)
+
+    # Strategia 2 (Piano B): Cerca in QUOTA_M_SLM (la vecchia colonna D)
+    if station_alt is None and 'QUOTA_M_SLM' in station_data.columns:
+        first_valid_idx = station_data['QUOTA_M_SLM'].first_valid_index()
+        if first_valid_idx is not None:
+            station_alt = float(station_data['QUOTA_M_SLM'].loc[first_valid_idx])
+
+    # Strategia 3 (Piano C): Default
+    if station_alt is None:
+        st.warning(f"Attenzione: Non è stato possibile trovare un valore di altitudine per la stazione {station_name}. Uso un valore di default di 500m.")
+        station_alt = 500.0
+
+    # Controllo robusto sulla temperatura
+    if not df_latest_station.empty and 'TEMPERATURA_MEDIANA' in df_latest_station and pd.notna(df_latest_station['TEMPERATURA_MEDIANA'].iloc[0]):
+        latest_temp = df_latest_station['TEMPERATURA_MEDIANA'].iloc[0]
+    else:
+        st.warning(f"Attenzione: Temperatura dell'ultimo giorno non disponibile per la stazione {station_name}. Uso un valore di default di 15°C.")
+        latest_temp = 15.0
+    
+    # --- QUESTA PARTE ORA E' AL POSTO GIUSTO ---
     with st.spinner("Sto generando il modello 3D del terreno... potrebbe richiedere qualche secondo."):
         dem_data, dem_transform, raster_crs = extract_raster_data(DEM_PATH, station_lon, station_lat)
         aspect_data, _, _ = extract_raster_data(ASPECT_PATH, station_lon, station_lat)
@@ -153,8 +183,6 @@ def create_pydeck_map(station_data, df_latest_station):
     st.pydeck_chart(deck)
     st.caption(f"Simulazione basata sui dati dell'ultimo giorno disponibile: {latest_temp:.1f}°C a {station_alt:.0f}m (Stazione di {station_data['STAZIONE'].iloc[0]}).")
 
-# --- 2. CONFIGURAZIONE CENTRALE E FUNZIONI DI BASE ---
-SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRxitMYpUqvX6bxVaukG01lJDC8SUfXtr47Zv5ekR1IzfR1jmhUilBsxZPJ8hrktVHrBh6hUUWYUtox/pub?output=csv"
 
 COLONNE_FILTRO_RIEPILOGO = [
     "LEGENDA_TEMPERATURA_MEDIANA", "LEGENDA_PIOGGE_RESIDUA", "LEGENDA_MEDIA_PORCINI_CALDO_BASE", "LEGENDA_MEDIA_PORCINI_FREDDO_BASE",
