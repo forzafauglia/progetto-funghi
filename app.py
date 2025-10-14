@@ -153,6 +153,16 @@ def create_pydeck_map(station_data, df_latest_station):
         return
 
     df_map = pd.DataFrame(map_data)
+    if not map_data:
+        st.warning("Nessun dato valido trovato nell'area della stazione per generare la mappa 3D.")
+        return
+
+    df_map = pd.DataFrame(map_data)
+    
+    # --- RIGHE DI DEBUG DA AGGIUNGERE ---
+    st.write("Dati processati per la mappa 3D (prime 5 righe):")
+    st.dataframe(df_map.head())
+    # --- FINE RIGHE DI DEBUG ---
 
     # Impostazioni per Pydeck
     view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
