@@ -4,3 +4,6 @@ numpy
 plotly
 folium>=0.14.0
 streamlit-folium
+rasterio
+pydeck
+pyproj
