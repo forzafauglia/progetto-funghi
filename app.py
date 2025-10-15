@@ -170,7 +170,15 @@ def create_pydeck_map(station_data, df_latest_station):
         "html": "<b>Dati Stimati del Punto:</b><br/>Altitudine: {altitude:.0f} m<br/>Esposizione: {aspect_str}<br/>Temperatura Stimata: {temp_est:.1f} °C",
         "style": {"backgroundColor": "steelblue", "color": "white", "font-family": "Arial", "z-index": "10000"}
     }
-    deck = pdk.Deck(..., map_style=pdk.map_styles.ROAD, ...)
+    # URL dello stile OpenTopoMap
+    opentopo_map_style = "https://a.tile.opentopomap.org/{z}/{x}/{y}.png"
+
+    deck = pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        map_style=opentopo_map_style,  # <-- Qui usiamo il nostro URL personalizzato
+        tooltip=tooltip
+    )
     st.pydeck_chart(deck)
     st.caption(f"Simulazione basata sui dati dell'ultimo giorno disponibile: {latest_temp:.1f}°C a {station_alt:.0f}m (Stazione di {station_data['STAZIONE'].iloc[0]}).")
 
