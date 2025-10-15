@@ -156,15 +156,21 @@ def create_pydeck_map(station_data, df_latest_station):
     # Il resto della funzione rimane IDENTICO
     view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
     layer = pdk.Layer(
-        "GridCellLayer", data=df_map, get_position=["lon", "lat"], get_elevation="altitude",
-        get_fill_color="[255, (1 - (temp_est - 5) / 25) * 255, 0, 180]", elevation_scale=1,
-        cell_size=100, pickable=True, extruded=True,
+        "ColumnLayer",  # <-- CAMBIATO TIPO DI LAYER
+        data=df_map,
+        get_position=["lon", "lat"],
+        get_elevation="altitude",
+        get_fill_color="[255, (1 - (temp_est - 5) / 25) * 255, 0, 180]", 
+        elevation_scale=1,
+        radius=50,  # <-- CAMBIATO da cell_size a radius (raggio della colonna in metri)
+        pickable=True,
+        extruded=True,
     )
     tooltip = {
         "html": "<b>Dati Stimati del Punto:</b><br/>Altitudine: {altitude:.0f} m<br/>Esposizione: {aspect_str}<br/>Temperatura Stimata: {temp_est:.1f} °C",
         "style": {"backgroundColor": "steelblue", "color": "white", "font-family": "Arial", "z-index": "10000"}
     }
-    deck = pdk.Deck(layers=[layer], initial_view_state=view_state, map_style="mapbox://styles/mapbox/satellite-streets-v11", tooltip=tooltip)
+    deck = pdk.Deck(..., map_style=pdk.map_styles.ROAD, ...)
     st.pydeck_chart(deck)
     st.caption(f"Simulazione basata sui dati dell'ultimo giorno disponibile: {latest_temp:.1f}°C a {station_alt:.0f}m (Stazione di {station_data['STAZIONE'].iloc[0]}).")
 
