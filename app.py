@@ -153,35 +153,51 @@ def create_pydeck_map(station_data, df_latest_station):
     # st.write("Dati processati per la mappa 3D (prime 5 righe):")
     # st.dataframe(df_map.head())
 
-    # Il resto della funzione rimane IDENTICO
+    # NUOVO BLOCCO CORRETTO CON TILELAYER
+
+    # 1. Definiamo il ViewState (come prima)
     view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
-    layer = pdk.Layer(
-        "ColumnLayer",  # <-- CAMBIATO TIPO DI LAYER
+
+    # 2. Definiamo il layer per la mappa di base (OpenTopoMap)
+    tile_layer = pdk.Layer(
+        "TileLayer",
+        data="https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
+        min_zoom=1,
+        max_zoom=16,
+        tile_size=256,
+        opacity=0.8  # Leggera trasparenza per vedere meglio le colonne
+    )
+
+    # 3. Definiamo il layer per le nostre colonne 3D (come prima)
+    column_layer = pdk.Layer(
+        "ColumnLayer",
         data=df_map,
         get_position=["lon", "lat"],
         get_elevation="altitude",
         get_fill_color="[255, (1 - (temp_est - 5) / 25) * 255, 0, 180]", 
         elevation_scale=1,
-        radius=50,  # <-- CAMBIATO da cell_size a radius (raggio della colonna in metri)
+        radius=50,
         pickable=True,
         extruded=True,
     )
+
+    # 4. Definiamo il tooltip (come prima)
     tooltip = {
         "html": "<b>Dati Stimati del Punto:</b><br/>Altitudine: {altitude:.0f} m<br/>Esposizione: {aspect_str}<br/>Temperatura Stimata: {temp_est:.1f} °C",
         "style": {"backgroundColor": "steelblue", "color": "white", "font-family": "Arial", "z-index": "10000"}
     }
-    # URL dello stile OpenTopoMap
-    opentopo_map_style = "https://a.tile.opentopomap.org/{z}/{x}/{y}.png"
 
+    # 5. Creiamo l'oggetto Deck, combinando i due layer
     deck = pdk.Deck(
-        layers=[layer],
+        layers=[tile_layer, column_layer],  # <-- PRIMA LA MAPPA, POI I DATI
         initial_view_state=view_state,
-        map_style=opentopo_map_style,  # <-- Qui usiamo il nostro URL personalizzato
-        tooltip=tooltip
+        tooltip=tooltip,
+        map_style=None # <-- IMPORTANTE: non usiamo più uno stile di base
     )
+
+    # 6. Mostriamo la mappa (come prima)
     st.pydeck_chart(deck)
     st.caption(f"Simulazione basata sui dati dell'ultimo giorno disponibile: {latest_temp:.1f}°C a {station_alt:.0f}m (Stazione di {station_data['STAZIONE'].iloc[0]}).")
-
 
 COLONNE_FILTRO_RIEPILOGO = [
     "LEGENDA_TEMPERATURA_MEDIANA", "LEGENDA_PIOGGE_RESIDUA", "LEGENDA_MEDIA_PORCINI_CALDO_BASE", "LEGENDA_MEDIA_PORCINI_FREDDO_BASE",
