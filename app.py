@@ -194,7 +194,14 @@ def create_pydeck_map(station_data, df_latest_station):
 
     # 4. Definiamo il tooltip (come prima)
     tooltip = {
-        "html": "<b>Dati Stimati del Punto:</b><br/>Altitudine: {altitude:.0f} m<br/>Esposizione: {aspect_str}<br/>Temperatura Stimata: {temp_est:.1f} °C",
+        "html": """
+        <b>Punto Selezionato</b><br/>
+        Lat: {lat}<br/>
+        Lon: {lon}<br/>
+        Alt: {altitude}<br/>
+        Esposizione: {aspect_str}<br/>
+        Temp. Stimata: {temp_est}
+        """,
         "style": {"backgroundColor": "steelblue", "color": "white", "font-family": "Arial", "z-index": "10000"}
     }
 
