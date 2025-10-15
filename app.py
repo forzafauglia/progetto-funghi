@@ -149,9 +149,20 @@ def create_pydeck_map(station_data, df_latest_station):
         return
         
     df_map = pd.DataFrame(map_data)
-    # Rimuoviamo o commentiamo il debug per pulizia
-    st.write("Dati processati per la mappa 3D (prime 5 righe):")
-    st.dataframe(df_map.head())
+
+    # --- INIZIO NUOVA PARTE: STABILIZZAZIONE TIPI DI DATO ---
+    # Convertiamo esplicitamente le colonne numeriche in un formato standard
+    # per massima compatibilità con il rendering di Pydeck.
+    df_map['altitude'] = df_map['altitude'].astype('float64')
+    df_map['temp_est'] = df_map['temp_est'].astype('float64')
+    df_map['lon'] = df_map['lon'].astype('float64')
+    df_map['lat'] = df_map['lat'].astype('float64')
+    # --- FINE NUOVA PARTE ---
+
+    # --- BLOCCO DI DEBUG (ora lo commentiamo, non serve più) ---
+    # st.write("Dati processati per la mappa 3D (prime 10 righe):")
+    # st.dataframe(df_map.head(10))
+    # --- FINE BLOCCO DEBUG ---
 
     # NUOVO BLOCCO CORRETTO CON TILELAYER
 
