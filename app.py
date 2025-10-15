@@ -150,8 +150,8 @@ def create_pydeck_map(station_data, df_latest_station):
         
     df_map = pd.DataFrame(map_data)
     # Rimuoviamo o commentiamo il debug per pulizia
-        st.write("Dati processati per la mappa 3D (prime 5 righe):")
-        st.dataframe(df_map.head())
+    st.write("Dati processati per la mappa 3D (prime 5 righe):")
+    st.dataframe(df_map.head())
 
     # NUOVO BLOCCO CORRETTO CON TILELAYER
 
