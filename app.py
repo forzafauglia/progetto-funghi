@@ -150,14 +150,13 @@ def create_pydeck_map(station_data, df_latest_station):
         
     df_map = pd.DataFrame(map_data)
 
-    # --- INIZIO NUOVA PARTE: STABILIZZAZIONE TIPI DI DATO ---
-    # Convertiamo esplicitamente le colonne numeriche in un formato standard
-    # per massima compatibilità con il rendering di Pydeck.
-    df_map['altitude'] = df_map['altitude'].astype('float64')
-    df_map['temp_est'] = df_map['temp_est'].astype('float64')
-    df_map['lon'] = df_map['lon'].astype('float64')
-    df_map['lat'] = df_map['lat'].astype('float64')
-    # --- FINE NUOVA PARTE ---
+    # --- BLOCCO FINALE: ARROTONDAMENTO E STABILIZZAZIONE DATI ---
+    # Arrotondiamo i valori numerici per un tooltip pulito
+    df_map['altitude'] = df_map['altitude'].round(0).astype(int) # Arrotonda all'intero più vicino
+    df_map['temp_est'] = df_map['temp_est'].round(1) # Arrotonda a 1 cifra decimale
+    df_map['lon'] = df_map['lon'].round(5) # 5 decimali per coordinate sono sufficienti
+    df_map['lat'] = df_map['lat'].round(5)
+    # --- FINE BLOCCO FINALE ---
 
     # --- BLOCCO DI DEBUG (ora lo commentiamo, non serve più) ---
     # st.write("Dati processati per la mappa 3D (prime 10 righe):")
