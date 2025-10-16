@@ -98,8 +98,7 @@ def display_main_map(df, last_loaded_ts):
     try:
         if 'LEGENDA_ULTIMO_AGGIORNAMENTO_SHEET' in df_latest.columns and not df_latest['LEGENDA_ULTIMO_AGGIORNAMENTO_SHEET'].empty:
             st.sidebar.info(f"Sheet aggiornato il: **{df_latest['LEGENDA_ULTIMO_AGGIORNAMENTO_SHEET'].iloc[0]}**")
-    except IndexError:
-        pass
+    except IndexError: pass
 
     st.sidebar.markdown("---"); st.sidebar.subheader("Filtri Dati Standard")
     df_filtrato = df_latest.copy()
@@ -129,7 +128,7 @@ def display_main_map(df, last_loaded_ts):
     Geocoder(collapsed=True, placeholder='Cerca un luogo...', add_marker=True).add_to(mappa)
 
     def create_popup_html(row):
-        html = """<style>...</style><div class="popup-container">""" # Stile CSS omesso per brevità
+        html = """<style>.popup-container{font-family:Arial,sans-serif;font-size:13px;max-height:350px;overflow-y:auto;overflow-x:hidden}h4{margin-top:12px;margin-bottom:5px;color:#0057e7;border-bottom:1px solid #ccc;padding-bottom:3px}table{width:100%;border-collapse:collapse;margin-bottom:10px}td{text-align:left;padding:4px;border-bottom:1px solid #eee}td:first-child{font-weight:bold;color:#333;width:65%}td:last-child{color:#555}.btn-container{text-align:center;margin-top:15px;}.btn{background-color:#007bff;color:white;padding:8px 12px;border-radius:5px;text-decoration:none;font-weight:bold;}</style><div class="popup-container">"""
         groups = {"Info Stazione": ["STAZIONE", "CODICE", "LEGENDA_DESCRIZIONE", "LEGENDA_COMUNE", "LEGENDA_ALTITUDINE"], "Dati Meteo": ["LEGENDA_TEMPERATURA_MEDIANA_MINIMA", "LEGENDA_TEMPERATURA_MEDIANA", "LEGENDA_UMIDITA_MEDIA_7GG", "LEGENDA_PIOGGE_RESIDUA", "LEGENDA_TOTALE_PIOGGE_MENSILI"], "Analisi Base": ["LEGENDA_MEDIA_PORCINI_CALDO_BASE", "LEGENDA_MEDIA_PORCINI_CALDO_BOOST", "LEGENDA_DURATA_RANGE_CALDO", "LEGENDA_CONTEGGIO_GG_ALLA_RACCOLTA_CALDO", "LEGENDA_MEDIA_PORCINI_FREDDO_BASE", "LEGENDA_MEDIA_PORCINI_FREDDO_BOOST", "LEGENDA_DURATA_RANGE_FREDDO", "LEGENDA_CONTEGGIO_GG_ALLA_RACCOLTA_FREDDO"], "Analisi Sbalzo Migliore": ["LEGENDA_SBALZO_TERMICO_MIGLIORE", "LEGENDA_MEDIA_PORCINI_CALDO_ST_MIGLIORE", "LEGENDA_MEDIA_BOOST_CALDO_ST_MIGLIORE", "LEGENDA_GG_ST_MIGLIORE_CALDO", "LEGENDA_MEDIA_PORCINI_FREDDO_ST_MIGLIORE", "LEGENDA_MEDIA_BOOST_FREDDO_ST_MIGLIORE", "LEGENDA_GG_ST_MIGLIORE_FREDDO"], "Analisi Sbalzo Secondo": ["LEGENDA_SBALZO_TERMICO_SECONDO", "LEGENDA_MEDIA_PORCINI_CALDO_ST_SECONDO", "LEGENDA_MEDIA_BOOST_CALDO_ST_SECONDO", "LEGENDA_GG_ST_SECONDO_CALDO", "LEGENDA_MEDIA_PORCini_FREDDO_ST_SECONDO", "LEGENDA_MEDIA_BOOST_FREDDO_ST_SECONDO", "LEGENDA_GG_ST_SECONDO_FREDDO"]}
         for title, columns in groups.items():
             table_html = "<table>"; has_content = False
@@ -141,7 +140,6 @@ def display_main_map(df, last_loaded_ts):
             table_html += "</table>"
             if has_content: html += f"<h4>{title}</h4>{table_html}"
         
-        # MODIFICA: Il link ora usa il CODICE univoco
         link = f'?station={row["CODICE"]}'
         html += f"<div class='btn-container'><a href='{link}' target='_self' class='btn'>📈 Mostra Storico Stazione</a></div></div>"
         return html
@@ -155,8 +153,6 @@ def display_main_map(df, last_loaded_ts):
             colore = get_marker_color(row.get('LEGENDA_COLORE', 'gray'))
             popup_html = create_popup_html(row)
             popup = folium.Popup(popup_html, max_width=380)
-
-            # MODIFICA: Tooltip migliorato per mostrare sia nome che codice
             tooltip_text = f"Stazione: {row['STAZIONE']} ({row['CODICE']})"
 
             folium.CircleMarker(
@@ -187,11 +183,7 @@ def display_period_analysis(df):
     start_date, end_date = date_range
     df_filtered = df_with_dates[df_with_dates['DATA'].dt.date.between(start_date, end_date)]
     
-    # MODIFICA: Aggregazione per CODICE, mantenendo STAZIONE per la visualizzazione
-    agg_cols = {
-        'STAZIONE': 'first', 'TOTALE_PIOGGIA_GIORNO': 'sum', 'LATITUDINE': 'first', 
-        'LONGITUDINE': 'first', 'TEMP_MAX': 'mean', 'TEMP_MIN': 'mean', 'TEMPERATURA_MEDIANA': 'mean'
-    }
+    agg_cols = {'STAZIONE': 'first', 'TOTALE_PIOGGIA_GIORNO': 'sum', 'LATITUDINE': 'first', 'LONGITUDINE': 'first', 'TEMP_MAX': 'mean', 'TEMP_MIN': 'mean', 'TEMPERATURA_MEDIANA': 'mean'}
     df_agg = df_filtered.groupby('CODICE').agg(agg_cols).reset_index().dropna(subset=['LATITUDINE', 'LONGITUDINE'])
     df_agg.rename(columns={'TEMP_MAX': 'MEDIA_TEMP_MAX', 'TEMP_MIN': 'MEDIA_TEMP_MIN', 'TEMPERATURA_MEDIANA': 'MEDIA_TEMP_MEDIANA'}, inplace=True)
     
@@ -200,22 +192,30 @@ def display_period_analysis(df):
     if not df_agg.empty:
         max_rain = float(df_agg['TOTALE_PIOGGIA_GIORNO'].max()) if not df_agg['TOTALE_PIOGGIA_GIORNO'].empty else 100.0
         rain_range = st.sidebar.slider("Pioggia Totale (mm)", 0.0, max_rain, (0.0, max_rain))
-        # ... (altri slider rimangono invariati)
+        max_tmax = float(df_agg['MEDIA_TEMP_MAX'].max()) if df_agg['MEDIA_TEMP_MAX'].notna().any() else 40.0
+        tmax_range = st.sidebar.slider("Temp. Max Media (°C)", 0.0, max_tmax, (0.0, max_tmax))
+        max_tmin = float(df_agg['MEDIA_TEMP_MIN'].max()) if df_agg['MEDIA_TEMP_MIN'].notna().any() else 30.0
+        tmin_range = st.sidebar.slider("Temp. Min Media (°C)", -20.0, max_tmin, (-20.0, max_tmin))
+        max_tmed = float(df_agg['MEDIA_TEMP_MEDIANA'].max()) if df_agg['MEDIA_TEMP_MEDIANA'].notna().any() else 35.0
+        tmed_range = st.sidebar.slider("Temp. Mediana Media (°C)", 0.0, max_tmed, (0.0, max_tmed))
+
         df_agg_filtered = df_agg[df_agg['TOTALE_PIOGGIA_GIORNO'].between(rain_range[0], rain_range[1])]
-        # ... (altri filtri rimangono invariati)
+        if 'MEDIA_TEMP_MAX' in df_agg_filtered.columns and df_agg_filtered['MEDIA_TEMP_MAX'].notna().any(): df_agg_filtered = df_agg_filtered[df_agg_filtered['MEDIA_TEMP_MAX'].between(tmax_range[0], tmax_range[1])]
+        if 'MEDIA_TEMP_MIN' in df_agg_filtered.columns and df_agg_filtered['MEDIA_TEMP_MIN'].notna().any(): df_agg_filtered = df_agg_filtered[df_agg_filtered['MEDIA_TEMP_MIN'].between(tmin_range[0], tmin_range[1])]
+        if 'MEDIA_TEMP_MEDIANA' in df_agg_filtered.columns and df_agg_filtered['MEDIA_TEMP_MEDIANA'].notna().any(): df_agg_filtered = df_agg_filtered[df_agg_filtered['MEDIA_TEMP_MEDIANA'].between(tmed_range[0], tmed_range[1])]
 
     st.info(f"Visualizzando **{len(df_agg_filtered)}** stazioni che corrispondono ai filtri.")
     
     map_center = [df_agg_filtered['LATITUDINE'].mean(), df_agg_filtered['LONGITUDINE'].mean()] if not df_agg_filtered.empty else [43.8, 11.0]
     mappa = create_map(map_tile, location=map_center, zoom=8)
     
-    if not df_agg_filtered.empty:
+    if df_agg_filtered.empty: 
+        st.warning("Nessuna stazione corrisponde ai filtri selezionati.")
+    else:
         min_rain, max_rain = df_agg_filtered['TOTALE_PIOGGIA_GIORNO'].min(), df_agg_filtered['TOTALE_PIOGGIA_GIORNO'].max()
-        colormap = linear.YlGnBu_09.scale(vmin=min_rain, vmax=max_rain if max_rain > min_rain else min_rain + 1)
-        colormap.caption = 'Totale Piogge (mm) nel Periodo'; mappa.add_child(colormap)
+        colormap = linear.YlGnBu_09.scale(vmin=min_rain, vmax=max_rain if max_rain > min_rain else min_rain + 1); colormap.caption = 'Totale Piogge (mm) nel Periodo'; mappa.add_child(colormap)
         
         for _, row in df_agg_filtered.iterrows():
-            # MODIFICA: Titolo del grafico nel popup migliorato
             title_text = f"<b>{row['STAZIONE']} ({row['CODICE']})</b>"
             fig = go.Figure(go.Bar(x=['Pioggia Totale'], y=[row['TOTALE_PIOGGIA_GIORNO']], marker_color='#007bff', text=[f"{row['TOTALE_PIOGGIA_GIORNO']:.1f} mm"], textposition='auto'))
             fig.update_layout(title_text=title_text, title_font_size=14, yaxis_title="mm", width=250, height=200, margin=dict(l=40,r=20,t=40,b=20), showlegend=False)
@@ -224,7 +224,6 @@ def display_period_analysis(df):
             
             lat, lon = float(row['LATITUDINE']), float(row['LONGITUDINE'])
             color = colormap(row['TOTALE_PIOGGIA_GIORNO'])
-            # MODIFICA: Tooltip migliorato
             tooltip_text = f"Stazione: {row['STAZIONE']} ({row['CODICE']})<br>Pioggia: {row['TOTALE_PIOGGIA_GIORNO']:.1f} mm<br>T.Max: {row.get('MEDIA_TEMP_MAX', 0.0):.1f}°C<br>T.Min: {row.get('MEDIA_TEMP_MIN', 0.0):.1f}°C"
             folium.CircleMarker(location=[lat, lon], radius=8, color=color, fill=True, fill_color=color, fill_opacity=0.7, popup=popup, tooltip=tooltip_text).add_to(mappa)
             
@@ -233,17 +232,14 @@ def display_period_analysis(df):
     with st.expander("Vedi dati aggregati filtrati"):
         if not df_agg_filtered.empty:
             df_display = df_agg_filtered.copy()
-            # MODIFICA: Link storico basato su CODICE
             df_display['link_storico'] = df_display['CODICE'].apply(lambda code: f"?station={code}")
-            # MODIFICA: Ordine colonne migliorato per mostrare sia CODICE che STAZIONE
             st.data_editor(df_display, column_config={"link_storico": st.column_config.LinkColumn("Link Storico", display_text="📈 Vedi Storico"), "LATITUDINE": None, "LONGITUDINE": None},
                            column_order=("CODICE", "STAZIONE", "link_storico", "TOTALE_PIOGGIA_GIORNO", "MEDIA_TEMP_MAX", "MEDIA_TEMP_MIN", "MEDIA_TEMP_MEDIANA"),
                            hide_index=True, disabled=True)
         else:
-            st.write("Nessun dato da visualizzare.")
+            st.write("Nessun dato da visualizzare in base ai filtri selezionati.")
 
 def add_sbalzo_line(fig, df_data, sbalzo_col_name, label):
-    # ... (questa funzione non necessita di modifiche) ...
     if sbalzo_col_name not in df_data.columns: return
     df_valid_sbalzo = df_data.dropna(subset=[sbalzo_col_name])
     if df_valid_sbalzo.empty: return
@@ -261,35 +257,62 @@ def display_station_detail(df, station_code):
     if st.button("⬅️ Torna alla Mappa Riepilogativa"): 
         st.query_params.clear()
 
-    # MODIFICA: Filtra per CODICE univoco
     df_station = df[df['CODICE'] == station_code].sort_values('DATA').copy()
     
     if df_station.empty: 
         st.error(f"Dati non trovati per la stazione con codice: {station_code}.")
         return
 
-    # MODIFICA: Titolo della pagina più descrittivo
     descriptive_name = df_station['STAZIONE'].iloc[0]
     st.header(f"📈 Storico Dettagliato: {descriptive_name} ({station_code})")
 
+    if not df_station.empty: 
+        end_date_default = df_station['DATA'].max()
+        start_date_default = end_date_default - pd.Timedelta(days=39)
+    else: 
+        end_date_default = datetime.now()
+        start_date_default = end_date_default - pd.Timedelta(days=39)
+    
     config_chart = {'toImageButtonOptions': {'format': 'png', 'scale': 2, 'filename': f'grafico_{station_code}'}, 'displaylogo': False}
-    # ... (logica dei grafici rimane invariata) ...
-    end_date_default = df_station['DATA'].max()
-    start_date_default = end_date_default - pd.Timedelta(days=39)
 
+    # --- Grafico 1: Precipitazioni ---
     st.subheader("Andamento Precipitazioni Giornaliere")
-    # ... (codice grafico 1 invariato)
-    
+    fig1 = go.Figure(go.Bar(x=df_station['DATA'], y=df_station['TOTALE_PIOGGIA_GIORNO']))
+    max_y_rain = df_station['TOTALE_PIOGGIA_GIORNO'].max() * 1.1 if not df_station['TOTALE_PIOGGIA_GIORNO'].empty else 100
+    fig1.update_layout(title="Pioggia Giornaliera", xaxis_title="Data", yaxis_title="mm", xaxis_range=[start_date_default, end_date_default], yaxis_range=[0, max_y_rain])
+    st.plotly_chart(fig1, use_container_width=True, config=config_chart)
+
+    # --- Grafico 2: Temperatura vs Piogge Residue ---
     st.subheader("Correlazione Temperatura Mediana e Piogge Residue")
-    # ... (codice grafico 2 invariato)
-    
+    cols_needed = ['PIOGGE_RESIDUA_ZOFFOLI', 'TEMPERATURA_MEDIANA']
+    if all(c in df_station.columns for c in cols_needed) and not df_station.dropna(subset=cols_needed).empty:
+        df_chart = df_station.dropna(subset=cols_needed)
+        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+        fig2.add_trace(go.Scatter(x=df_chart['DATA'], y=df_chart['PIOGGE_RESIDUA_ZOFFOLI'], name='Piogge Residua', mode='lines', line=dict(color='blue')), secondary_y=False)
+        fig2.add_trace(go.Scatter(x=df_chart['DATA'], y=df_chart['TEMPERATURA_MEDIANA'], name='Temperatura Mediana', mode='lines', line=dict(color='red')), secondary_y=True)
+        max_y_rain_res = df_chart['PIOGGE_RESIDUA_ZOFFOLI'].max() * 1.1; min_y_rain_res = df_chart['PIOGGE_RESIDUA_ZOFFOLI'].min() * 0.9
+        max_y_temp_med = df_chart['TEMPERATURA_MEDIANA'].max() * 1.1; min_y_temp_med = df_chart['TEMPERATURA_MEDIANA'].min() * 0.9
+        fig2.update_yaxes(title_text="<b>Piogge Residua</b>", range=[min_y_rain_res, max_y_rain_res], secondary_y=False)
+        fig2.update_yaxes(title_text="<b>Temperatura Mediana (°C)</b>", range=[min_y_temp_med, max_y_temp_med], secondary_y=True)
+        fig2.update_layout(title_text="Temp vs Piogge", xaxis_range=[start_date_default, end_date_default])
+        add_sbalzo_line(fig2, df_station, 'SBALZO_TERMICO_MIGLIORE', 'Sbalzo Migliore'); add_sbalzo_line(fig2, df_station, '2°_SBALZO_TERMICO_MIGLIORE', '2° Sbalzo')
+        st.plotly_chart(fig2, use_container_width=True, config=config_chart)
+    else: 
+        st.warning("Dati di Piogge Residue o Temperatura Mediana non disponibili per creare il grafico.")
+
+    # --- Grafico 3: Temperature Min/Max ---
     st.subheader("Andamento Temperature Minime e Massime")
-    # ... (codice grafico 3 invariato)
+    fig3 = go.Figure()
+    fig3.add_trace(go.Scatter(x=df_station['DATA'], y=df_station['TEMP_MAX'], name='Temp Max', line=dict(color='orangered')))
+    fig3.add_trace(go.Scatter(x=df_station['DATA'], y=df_station['TEMP_MIN'], name='Temp Min', line=dict(color='skyblue'), fill='tonexty'))
+    max_y_temp = df_station['TEMP_MAX'].max() * 1.1 if not df_station['TEMP_MAX'].empty else 40
+    min_y_temp = df_station['TEMP_MIN'].min() * 0.9 if not df_station['TEMP_MIN'].empty else -10
+    fig3.update_layout(title="Escursione Termica Giornaliera", xaxis_title="Data", yaxis_title="°C", xaxis_range=[start_date_default, end_date_default], yaxis_range=[min_y_temp, max_y_temp])
+    st.plotly_chart(fig3, use_container_width=True, config=config_chart)
 
     with st.expander("Visualizza tabella dati storici completi"):
         all_cols = sorted([c for c in df_station.columns if not c.startswith('LEGENDA_') and c not in ['LATITUDINE', 'LONGITUDINE', 'COORDINATEGOOGLE']])
         
-        # MODIFICA: Aggiunto CODICE e STAZIONE alle colonne di default
         defaults = [
             'DATA', 'CODICE', 'STAZIONE', 'TOTALE_PIOGGIA_GIORNO', 'PIOGGE_RESIDUA_ZOFFOLI', 
             'TEMPERATURA_MEDIANA', 'TEMPERATURA_MEDIANA_MINIMA', 'SBALZO_TERMICO', 
@@ -314,12 +337,10 @@ def main():
     
     df, last_loaded_ts = load_and_prepare_data(SHEET_URL)
     if df is None or df.empty: 
-        st.error("Caricamento dati fallito o il file è vuoto. Controlla il Google Sheet.")
         st.stop()
     
     query_params = st.query_params
     if "station" in query_params:
-        # La variabile 'station' ora contiene il CODICE
         display_station_detail(df, query_params["station"])
     else:
         if check_password():
