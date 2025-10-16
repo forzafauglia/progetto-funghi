@@ -13,6 +13,7 @@ from branca.colormap import linear
 import os # --- NUOVO IMPORTO --- per controllare i percorsi dei file
 import pydeck as pdk # --- NUOVO IMPORTO --- per le mappe 3D
 import rasterio # --- NUOVO IMPORTO --- per leggere i file GeoTIFF
+from rasterio.enums import Resampling
 
 # --- 2. CONFIGURAZIONE CENTRALE E FUNZIONI DI BASE ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRxitMYpUqvX6bxVaukG01lJDC8SUfXtr47Zv5ekR1IzfR1jmhUilBsxZPJ8hrktVHrBh6hUUWYUtox/pub?output=csv"
@@ -76,51 +77,65 @@ def create_map(tile, location=[43.8, 11.0], zoom=8):
 
 # --- NUOVA FUNZIONE HELPER per caricare e processare il DEM ---
 @st.cache_data
-def load_and_process_dem(station_code):
+# --- NUOVO IMPORTO NECESSARIO ---
+from rasterio.enums import Resampling
+
+# --- NUOVA FUNZIONE HELPER per caricare e processare il DEM (MODIFICATA) ---
+@st.cache_data
+def load_and_process_dem(station_code, target_points=30000):
     """
-    Carica il file GeoTIFF per una data stazione, legge i dati di elevazione
-    e li trasforma in un DataFrame adatto per Pydeck.
+    Carica il file GeoTIFF e lo sottocampiona (downsamples) a un numero
+    target di punti per renderlo leggero e veloce per il web.
     """
     filepath = os.path.join("ritagli", f"{station_code}.tif")
     if not os.path.exists(filepath):
         return None, None
 
     with rasterio.open(filepath) as src:
-        elevation_data = src.read(1)  # Legge il primo (e unico) band
-        bounds = src.bounds
-        height, width = src.height, src.width
+        # Calcola il fattore di downsampling per raggiungere il target_points
+        total_pixels = src.width * src.height
+        if total_pixels > target_points:
+            factor = (total_pixels / target_points) ** 0.5
+            new_width = int(src.width / factor)
+            new_height = int(src.height / factor)
+        else:
+            new_width, new_height = src.width, src.height
 
-    # Crea le coordinate per ogni pixel della griglia
+        # Leggi i dati ricampionandoli a una risoluzione inferiore
+        elevation_data = src.read(
+            1,
+            out_shape=(new_height, new_width),
+            resampling=Resampling.bilinear  # Metodo di ricampionamento di buona qualità
+        )
+        bounds = src.bounds
+        height, width = elevation_data.shape
+
+    # Il resto della funzione rimane simile
     lons = np.linspace(bounds.left, bounds.right, width)
-    lats = np.linspace(bounds.bottom, bounds.top, height)
+    lats = np.linspace(bounds.top, bounds.bottom, height) # Modificato per correttezza
     lons_grid, lats_grid = np.meshgrid(lons, lats)
 
-    # Converte i dati in un DataFrame per Pydeck
     df_pydeck = pd.DataFrame({
         'lon': lons_grid.flatten(),
         'lat': lats_grid.flatten(),
         'elevation': elevation_data.flatten()
     })
     
-    # Inverti la latitudine perché la griglia viene letta dall'alto verso il basso
-    df_pydeck['lat'] = df_pydeck['lat'].iloc[::-1].values
+    # Rimuovi eventuali valori nulli che rasterio può inserire ai bordi
+    df_pydeck.dropna(inplace=True)
 
-    # Calcola la dimensione della cella in gradi
-    cell_size = (bounds.right - bounds.left) / width
+    cell_size_lon = (bounds.right - bounds.left) / width
     
-    return df_pydeck, cell_size
+    return df_pydeck, cell_size_lon
 
-
-# --- Le funzioni display_main_map e display_period_analysis rimangono invariate ---
-# ... (omesse per brevità, ma sono presenti nel codice completo sotto)
-
+# --- SOSTITUISCI QUESTA INTERA FUNZIONE NEL TUO CODICE ---
 def display_station_detail(df, station_code):
-    if st.button("⬅️ Torna alla Mappa Riepilogativa"): 
+    if st.button("⬅️ Torna alla Mappa Riepilogativa"):
         st.query_params.clear()
 
     df_station = df[df['CODICE'] == station_code].sort_values('DATA').copy()
     
-    if df_station.empty: 
+    if df_station.empty:
         st.error(f"Dati non trovati per la stazione con codice: {station_code}.")
         return
 
@@ -130,72 +145,79 @@ def display_station_detail(df, station_code):
 
     st.header(f"📈 Storico Dettagliato: {descriptive_name} ({station_code})")
 
-    # --- INIZIO BLOCCO VISUALIZZAZIONE 3D ---
+    # --- BLOCCO VISUALIZZAZIONE 3D (MODIFICATO) ---
     st.subheader("🌍 Visualizzazione 3D del Terreno Circostante")
 
-    if st.button("🗺️ Avvia Visualizzazione 3D del Terreno (20x20 km)"):
+    # Aggiungiamo un moltiplicatore per l'elevazione per renderla più visibile
+    elevation_multiplier = st.slider("Accentua rilievo 3D", min_value=1.0, max_value=10.0, value=2.5, step=0.5)
+
+    if st.button("🗺️ Avvia/Aggiorna Visualizzazione 3D del Terreno (20x20 km)"):
         with st.spinner("Caricamento dati altimetrici e rendering della mappa 3D..."):
-            dem_df, cell_size = load_and_process_dem(station_code)
+            dem_df, cell_size_deg = load_and_process_dem(station_code)
 
             if dem_df is None:
                 st.error(f"File DEM non trovato per la stazione {station_code}. Assicurati che 'ritagli/{station_code}.tif' esista.")
             else:
-                # Imposta la vista iniziale della mappa
                 view_state = pdk.ViewState(
                     latitude=station_lat,
                     longitude=station_lon,
                     zoom=11,
-                    pitch=45, # Angolo di inclinazione per la vista 3D
+                    pitch=50,
                     bearing=0
                 )
                 
-                # Layer per il terreno 3D
-                # Usiamo GridLayer che è perfetto per estrudere una griglia di dati
+                # Converti la dimensione della cella da gradi a metri (approssimazione)
+                # 1 grado di longitudine all'equatore ~ 111km. Lo adattiamo alla latitudine.
+                cell_size_meters = cell_size_deg * 111000 * np.cos(np.radians(station_lat))
+
                 terrain_layer = pdk.Layer(
                     'GridLayer',
                     data=dem_df,
                     get_position='[lon, lat]',
                     get_elevation='elevation',
-                    elevation_scale=1,  # Aumenta per accentuare il rilievo
+                    elevation_scale=elevation_multiplier, # USA IL MOLTIPLICATORE
                     extruded=True,
-                    cell_size=cell_size * 1000, # Converti gradi in metri (approssimazione)
+                    cell_size=cell_size_meters,
                     pickable=True,
-                    get_fill_color='[150, (255 - (elevation / 10)), 150, 150]' # Colore basato su altitudine
+                    # Colore basato sull'altitudine (da verde basso a marrone/bianco alto)
+                    color_range=[
+                        [1, 152, 189],
+                        [73, 227, 206],
+                        [216, 254, 181],
+                        [254, 237, 177],
+                        [254, 173, 84],
+                        [209, 55, 78]
+                    ],
                 )
 
-                # Layer per il marcatore della stazione
                 station_marker_layer = pdk.Layer(
                     'ScatterplotLayer',
                     data=pd.DataFrame([{'lat': station_lat, 'lon': station_lon}]),
                     get_position='[lon, lat]',
-                    get_fill_color='[255, 0, 0, 255]', # Rosso
-                    get_radius=100, # Raggio in metri
+                    get_fill_color='[255, 0, 0, 255]',
+                    get_radius=100,
                 )
 
-                # Tooltip per mostrare l'altitudine
                 tooltip = {
                     "html": "<b>Altitudine:</b> {elevation} m",
-                    "style": {
-                        "backgroundColor": "steelblue",
-                        "color": "white"
-                    }
+                    "style": {"backgroundColor": "steelblue", "color": "white"}
                 }
 
-                # Crea e visualizza il deck Pydeck
                 deck = pdk.Deck(
                     layers=[terrain_layer, station_marker_layer],
                     initial_view_state=view_state,
-                    map_style='mapbox://styles/mapbox/satellite-streets-v11', # Mappa satellitare di base
+                    map_style='mapbox://styles/mapbox/satellite-streets-v11',
                     tooltip=tooltip
                 )
                 st.pydeck_chart(deck)
 
-    st.markdown("---") # Separatore visivo
+    st.markdown("---")
 
     # --- I GRAFICI DELLO STORICO RIMANGONO INVARIATI ---
     config_chart = {'toImageButtonOptions': {'format': 'png', 'scale': 2, 'filename': f'grafico_{station_code}'}, 'displaylogo': False}
     end_date_default = df_station['DATA'].max()
     start_date_default = end_date_default - pd.Timedelta(days=39)
+
 
     st.subheader("Andamento Precipitazioni Giornaliere")
     fig1 = go.Figure(go.Bar(x=df_station['DATA'], y=df_station['TOTALE_PIOGGIA_GIORNO']))
