@@ -75,10 +75,6 @@ def load_and_prepare_data(url: str):
 def create_map(tile, location=[43.8, 11.0], zoom=8):
     return folium.Map(location=location, zoom_start=zoom, tiles=tile)
 
-# --- NUOVA FUNZIONE HELPER per caricare e processare il DEM ---
-@st.cache_data
-# --- NUOVO IMPORTO NECESSARIO ---
-from rasterio.enums import Resampling
 
 # --- NUOVA FUNZIONE HELPER per caricare e processare il DEM (MODIFICATA) ---
 @st.cache_data
