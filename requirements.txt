@@ -7,3 +7,5 @@ streamlit-folium
 rasterio
 pydeck
 pyproj
+Pillow
+branca
