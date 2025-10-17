@@ -75,57 +75,73 @@ def load_and_prepare_data(url: str):
 def create_map(tile, location=[43.8, 11.0], zoom=8):
     return folium.Map(location=location, zoom_start=zoom, tiles=tile)
 
-# --- SOSTITUISCI QUESTA FUNZIONE NEL TUO CODICE ---
+# --- NUOVA FUNZIONE HELPER PER CONVERTIRE GRADI IN DIREZIONE CARDINALE ---
+def get_aspect_direction(degrees):
+    """Converte i gradi dell'esposizione in una direzione cardinale (N, NE, E, etc.)."""
+    if degrees is None or np.isnan(degrees):
+        return "N/D"
+    if degrees < 0: # Valore standard per le aree piane
+        return "Piatto"
+    
+    dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"]
+    # Calcola l'indice nell'array dirs basato sui gradi
+    index = int(np.round((degrees % 360) / 45))
+    return dirs[index]
+
+# --- SOSTITUISCI QUESTA FUNZIONE (RINOMINATA E ADATTATA PER MULTI-BANDA) ---
 @st.cache_data
-def load_and_process_dem(station_code, target_points=30000):
+def load_multiband_data(station_code, target_points=40000):
     """
-    Carica il file GeoTIFF, gestisce i valori NoData, lo sottocampiona
-    e prepara i dati corretti per Pydeck.
+    Carica un singolo file GeoTIFF multi-banda (Banda 1: DEM, Banda 2: Aspect),
+    lo sottocampiona e lo prepara per Pydeck.
     """
-    filepath = os.path.join("ritagli", f"{station_code}.tif")
+    filepath = os.path.join("multibanda", f"{station_code}.tif")
     if not os.path.exists(filepath):
-        return None, None, None
+        st.error(f"File multibanda non trovato: {filepath}")
+        return None
 
     with rasterio.open(filepath) as src:
-        # --- CORREZIONE #1: GESTIONE DEI VALORI NODATA (-9999) ---
-        nodata_value = src.nodata  # Legge il valore NoData dal file (es. -9999)
-        
+        # Controlla che ci siano almeno 2 bande
+        if src.count < 2:
+            st.error(f"Il file {filepath} non è multibanda (trovate {src.count} bande, necessarie 2).")
+            return None
+
+        # Sottocampionamento
         total_pixels = src.width * src.height
         if total_pixels > target_points:
             factor = (total_pixels / target_points) ** 0.5
-            new_width = int(src.width / factor)
-            new_height = int(src.height / factor)
+            new_shape = (int(src.height / factor), int(src.width / factor))
         else:
-            new_width, new_height = src.width, src.height
+            new_shape = (src.height, src.width)
+        
+        # Leggi la Banda 1 (Altitudine)
+        dem_data = src.read(1, out_shape=new_shape, resampling=Resampling.bilinear)
+        
+        # Leggi la Banda 2 (Esposizione) con la stessa forma
+        aspect_data = src.read(2, out_shape=new_shape, resampling=Resampling.nearest)
 
-        elevation_data = src.read(
-            1,
-            out_shape=(new_height, new_width),
-            resampling=Resampling.bilinear
-        )
         bounds = src.bounds
-        height, width = elevation_data.shape
 
-        # Se esiste un valore NoData, sostituiscilo con NaN (Not a Number)
-        if nodata_value is not None:
-            elevation_data[elevation_data == nodata_value] = np.nan
+        # Gestisci i valori NoData per entrambe le bande
+        if src.nodatavals[0] is not None:
+            dem_data[dem_data == src.nodatavals[0]] = np.nan
+        if src.nodatavals[1] is not None:
+            aspect_data[aspect_data == src.nodatavals[1]] = np.nan
 
+    height, width = dem_data.shape
     lons = np.linspace(bounds.left, bounds.right, width)
     lats = np.linspace(bounds.bottom, bounds.top, height)
     lons_grid, lats_grid = np.meshgrid(lons, lats)
 
-    df_pydeck = pd.DataFrame({
+    df = pd.DataFrame({
         'lon': lons_grid.flatten(),
         'lat': lats_grid.flatten(),
-        'elevation': elevation_data.flatten()
+        'elevation': dem_data.flatten(),
+        'aspect': aspect_data.flatten()
     })
-    
-    # Ora .dropna() rimuoverà sia i punti ai bordi sia i punti NoData (-9999)
-    df_pydeck.dropna(inplace=True)
-    
-    cell_size_deg = (bounds.right - bounds.left) / width
+    df.dropna(inplace=True) # Rimuove i punti dove o DEM o Aspect sono NaN
+    return df
 
-    return df_pydeck, cell_size_deg, elevation_data
 
 # --- SOSTITUISCI QUESTA INTERA FUNZIONE NEL TUO CODICE ---
 def display_station_detail(df, station_code):
@@ -133,9 +149,8 @@ def display_station_detail(df, station_code):
         st.query_params.clear()
 
     df_station = df[df['CODICE'] == station_code].sort_values('DATA').copy()
-    
     if df_station.empty:
-        st.error(f"Dati non trovati per la stazione con codice: {station_code}.")
+        st.error(f"Dati non trovati per la stazione: {station_code}.")
         return
 
     descriptive_name = df_station['STAZIONE'].iloc[0]
@@ -143,49 +158,58 @@ def display_station_detail(df, station_code):
     station_lon = float(df_station['LONGITUDINE'].iloc[0])
 
     st.header(f"📈 Storico Dettagliato: {descriptive_name} ({station_code})")
+    st.subheader("🌍 Visualizzazione 3D Interattiva del Terreno")
 
-    st.subheader("🌍 Visualizzazione 3D del Terreno Circostante")
+    elevation_multiplier = st.slider("Accentua rilievo 3D", 1.0, 10.0, 2.5, 0.5)
 
-    elevation_multiplier = st.slider("Accentua rilievo 3D", min_value=1.0, max_value=10.0, value=2.5, step=0.5)
+    if st.button("🗺️ Avvia/Aggiorna Visualizzazione 3D"):
+        with st.spinner("Caricamento dati geografici e rendering..."):
+            geo_df = load_multiband_data(station_code)
 
-    if st.button("🗺️ Avvia/Aggiorna Visualizzazione 3D del Terreno (20x20 km)"):
-        with st.spinner("Caricamento dati altimetrici e rendering della mappa 3D..."):
-            dem_df, cell_size_deg, raw_elevation_data = load_and_process_dem(station_code)
-
-            if dem_df is None or dem_df.empty:
-                st.error(f"File DEM non trovato o senza dati validi per la stazione {station_code}.")
+            if geo_df is None or geo_df.empty:
+                st.error(f"File multibanda non trovato o senza dati validi per {station_code}.")
             else:
-                min_elev, max_elev = dem_df['elevation'].min(), dem_df['elevation'].max()
-                st.info(f"Dati altimetrici validi caricati. Altitudine Min: **{min_elev:.2f} m**, Max: **{max_elev:.2f} m**.")
+                min_elev, max_elev = geo_df['elevation'].min(), geo_df['elevation'].max()
+                st.info(f"Dati caricati. Altitudine: {min_elev:.1f}m - {max_elev:.1f}m.")
 
-                if min_elev == max_elev:
-                    st.warning("Attenzione: il rilievo del terreno è piatto.")
+                # Aggiungi una colonna per la direzione cardinale per usarla nel tooltip
+                geo_df['aspect_direction'] = geo_df['aspect'].apply(get_aspect_direction)
 
-                view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
+                view_state = pdk.ViewState(
+                    latitude=station_lat, longitude=station_lon,
+                    zoom=11, pitch=50, bearing=0,
+                )
                 
-                # Calcoliamo la larghezza di ogni colonna in metri
+                # Calcolo della dimensione delle celle
+                cell_size_deg = (geo_df['lon'].max() - geo_df['lon'].min()) / geo_df['lon'].nunique()
                 cell_width_meters = cell_size_deg * 111000 * np.cos(np.radians(station_lat))
 
-                # --- LA GRANDE MODIFICA: DA GridLayer a ColumnLayer ---
                 terrain_layer = pdk.Layer(
-                    'ColumnLayer',  # Usiamo il layer corretto
-                    data=dem_df,
+                    'ColumnLayer',
+                    data=geo_df,
                     get_position='[lon, lat]',
                     get_elevation='elevation',
                     elevation_scale=elevation_multiplier,
                     extruded=True,
-                    radius=cell_width_meters / 2, # Il raggio è metà della larghezza della cella
-                    n_sides=4, # 4 lati per creare prismi quadrati che si toccano
-                    get_fill_color=f'[150, 255 - (elevation - {min_elev}) / ({max_elev - min_elev} + 1) * 255, 150, 250]', # Colore in base all'altitudine
+                    radius=cell_width_meters / 2,
+                    n_sides=4,
+                    get_fill_color=f'[150, 255 - (elevation - {min_elev}) / ({max_elev - min_elev} + 1) * 255, 150, 250]',
                     pickable=True
                 )
-
+                
                 station_marker_layer = pdk.Layer(
-                    'ScatterplotLayer', data=pd.DataFrame([{'lat': station_lat, 'lon': station_lon}]),
-                    get_position='[lon, lat]', get_fill_color='[255, 0, 0, 255]', get_radius=100,
+                    'ScatterplotLayer',
+                    data=pd.DataFrame([{'lat': station_lat, 'lon': station_lon}]),
+                    get_position='[lon, lat]',
+                    get_fill_color='[255, 0, 0, 255]',
+                    get_radius=100,
                 )
 
-                tooltip = {"html": "<b>Altitudine:</b> {elevation} m", "style": {"backgroundColor": "steelblue", "color": "white"}}
+                # Tooltip aggiornato per mostrare l'esposizione
+                tooltip = {
+                    "html": "<b>Altitudine:</b> {elevation} m<br/><b>Esposizione:</b> {aspect_direction} ({aspect}°)",
+                    "style": {"backgroundColor": "steelblue", "color": "white"}
+                }
 
                 deck = pdk.Deck(
                     layers=[terrain_layer, station_marker_layer],
