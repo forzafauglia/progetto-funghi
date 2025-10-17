@@ -159,15 +159,25 @@ def display_station_detail(df, station_code):
                 st.info(f"Dati altimetrici validi caricati. Altitudine Min: **{min_elev:.2f} m**, Max: **{max_elev:.2f} m**.")
 
                 if min_elev == max_elev:
-                    st.warning("Attenzione: il rilievo del terreno è piatto. La mappa 3D potrebbe non mostrare variazioni.")
+                    st.warning("Attenzione: il rilievo del terreno è piatto.")
 
                 view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
-                cell_size_meters = cell_size_deg * 111000 * np.cos(np.radians(station_lat))
+                
+                # Calcoliamo la larghezza di ogni colonna in metri
+                cell_width_meters = cell_size_deg * 111000 * np.cos(np.radians(station_lat))
 
+                # --- LA GRANDE MODIFICA: DA GridLayer a ColumnLayer ---
                 terrain_layer = pdk.Layer(
-                    'GridLayer', data=dem_df, get_position='[lon, lat]', get_elevation='elevation',
-                    elevation_scale=elevation_multiplier, extruded=True, cell_size=cell_size_meters,
-                    pickable=True, color_range=[[1, 152, 189], [73, 227, 206], [216, 254, 181], [254, 237, 177], [254, 173, 84], [209, 55, 78]]
+                    'ColumnLayer',  # Usiamo il layer corretto
+                    data=dem_df,
+                    get_position='[lon, lat]',
+                    get_elevation='elevation',
+                    elevation_scale=elevation_multiplier,
+                    extruded=True,
+                    radius=cell_width_meters / 2, # Il raggio è metà della larghezza della cella
+                    n_sides=4, # 4 lati per creare prismi quadrati che si toccano
+                    get_fill_color=f'[150, 255 - (elevation - {min_elev}) / ({max_elev - min_elev} + 1) * 255, 150, 250]', # Colore in base all'altitudine
+                    pickable=True
                 )
 
                 station_marker_layer = pdk.Layer(
@@ -177,11 +187,10 @@ def display_station_detail(df, station_code):
 
                 tooltip = {"html": "<b>Altitudine:</b> {elevation} m", "style": {"backgroundColor": "steelblue", "color": "white"}}
 
-                # --- CORREZIONE #2: USARE UNA MAPPA BASE CHE NON RICHIEDE TOKEN ---
                 deck = pdk.Deck(
                     layers=[terrain_layer, station_marker_layer],
                     initial_view_state=view_state,
-                    map_style=None, # Usa la mappa OSM/Carto di default, senza errori
+                    map_style=None,
                     tooltip=tooltip
                 )
                 st.pydeck_chart(deck)
