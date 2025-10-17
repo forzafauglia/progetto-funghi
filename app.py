@@ -166,7 +166,7 @@ def display_station_detail(df, station_code):
                 
                 terrain_layer = pdk.Layer(
                     "TerrainLayer",
-                    id="terrain-layer", # Aggiungere un ID è buona pratica
+                    id="terrain-layer",
                     elevation_data=file_url,
                     texture="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
                     bounds=[bounds.left, bounds.bottom, bounds.right, bounds.top],
@@ -193,8 +193,7 @@ def display_station_detail(df, station_code):
                 deck = pdk.Deck(
                     layers=[terrain_layer, tooltip_layer, station_marker_layer],
                     initial_view_state=initial_view_state,
-                    # --- LA MODIFICA CHIAVE PER SBLOCCARE LA NAVIGAZIONE ---
-                    controller=True, 
+                    # IL PARAMETRO ERRATO "controller=True" È STATO RIMOSSO
                     tooltip={
                         "html": "<b>Altitudine:</b> {elevation} m<br/><b>Esposizione:</b> {aspect_direction} ({aspect:.0f}°)",
                         "style": {"backgroundColor": "steelblue", "color": "white"}
