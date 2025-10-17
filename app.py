@@ -75,38 +75,31 @@ def load_and_prepare_data(url: str):
 def create_map(tile, location=[43.8, 11.0], zoom=8):
     return folium.Map(location=location, zoom_start=zoom, tiles=tile)
 
+# --- NUOVI IMPORT PER LA SOLUZIONE TerrainLayer ---
+from PIL import Image
+import io
+
 # --- NUOVA FUNZIONE HELPER PER CONVERTIRE GRADI IN DIREZIONE CARDINALE ---
 def get_aspect_direction(degrees):
-    """Converte i gradi dell'esposizione in una direzione cardinale (N, NE, E, etc.)."""
-    if degrees is None or np.isnan(degrees):
-        return "N/D"
-    if degrees < 0: # Valore standard per le aree piane
-        return "Piatto"
-    
+    if degrees is None or np.isnan(degrees): return "N/D"
+    if degrees < 0: return "Piatto"
     dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"]
-    # Calcola l'indice nell'array dirs basato sui gradi
     index = int(np.round((degrees % 360) / 45))
     return dirs[index]
 
-# --- SOSTITUISCI QUESTA FUNZIONE (RINOMINATA E ADATTATA PER MULTI-BANDA) ---
+# --- SOSTITUISCI QUESTA FUNZIONE (ADATTATA PER TerrainLayer) ---
 @st.cache_data
 def load_multiband_data(station_code, target_points=40000):
-    """
-    Carica un singolo file GeoTIFF multi-banda (Banda 1: DEM, Banda 2: Aspect),
-    lo sottocampiona e lo prepara per Pydeck.
-    """
     filepath = os.path.join("multibanda", f"{station_code}.tif")
     if not os.path.exists(filepath):
         st.error(f"File multibanda non trovato: {filepath}")
-        return None
+        return None, None
 
     with rasterio.open(filepath) as src:
-        # Controlla che ci siano almeno 2 bande
         if src.count < 2:
-            st.error(f"Il file {filepath} non è multibanda (trovate {src.count} bande, necessarie 2).")
-            return None
+            st.error(f"Il file {filepath} non è multibanda.")
+            return None, None
 
-        # Sottocampionamento
         total_pixels = src.width * src.height
         if total_pixels > target_points:
             factor = (total_pixels / target_points) ** 0.5
@@ -114,34 +107,30 @@ def load_multiband_data(station_code, target_points=40000):
         else:
             new_shape = (src.height, src.width)
         
-        # Leggi la Banda 1 (Altitudine)
         dem_data = src.read(1, out_shape=new_shape, resampling=Resampling.bilinear)
-        
-        # Leggi la Banda 2 (Esposizione) con la stessa forma
         aspect_data = src.read(2, out_shape=new_shape, resampling=Resampling.nearest)
-
         bounds = src.bounds
 
-        # Gestisci i valori NoData per entrambe le bande
         if src.nodatavals[0] is not None:
             dem_data[dem_data == src.nodatavals[0]] = np.nan
         if src.nodatavals[1] is not None:
             aspect_data[aspect_data == src.nodatavals[1]] = np.nan
 
+    # --- NUOVO: CREAZIONE DEL DATAFRAME PER I TOOLTIP ---
+    # Creiamo una griglia di coordinate per i tooltip
     height, width = dem_data.shape
     lons = np.linspace(bounds.left, bounds.right, width)
     lats = np.linspace(bounds.bottom, bounds.top, height)
     lons_grid, lats_grid = np.meshgrid(lons, lats)
-
-    df = pd.DataFrame({
+    tooltip_df = pd.DataFrame({
         'lon': lons_grid.flatten(),
         'lat': lats_grid.flatten(),
         'elevation': dem_data.flatten(),
         'aspect': aspect_data.flatten()
     })
-    df.dropna(inplace=True) # Rimuove i punti dove o DEM o Aspect sono NaN
-    return df
+    tooltip_df.dropna(inplace=True)
 
+    return dem_data, bounds, tooltip_df
 
 # --- SOSTITUISCI QUESTA INTERA FUNZIONE NEL TUO CODICE ---
 def display_station_detail(df, station_code):
@@ -163,63 +152,73 @@ def display_station_detail(df, station_code):
     elevation_multiplier = st.slider("Accentua rilievo 3D", 1.0, 10.0, 2.5, 0.5)
 
     if st.button("🗺️ Avvia/Aggiorna Visualizzazione 3D"):
-        with st.spinner("Caricamento dati geografici e rendering..."):
-            geo_df = load_multiband_data(station_code)
+        with st.spinner("Caricamento e preparazione dati geografici..."):
+            dem_data, bounds, tooltip_df = load_multiband_data(station_code)
 
-            if geo_df is None or geo_df.empty:
-                st.error(f"File multibanda non trovato o senza dati validi per {station_code}.")
+            if dem_data is None:
+                st.error(f"Dati per la stazione {station_code} non caricati.")
             else:
-                min_elev, max_elev = geo_df['elevation'].min(), geo_df['elevation'].max()
-                st.info(f"Dati caricati. Altitudine: {min_elev:.1f}m - {max_elev:.1f}m.")
+                st.info(f"Dati caricati. Naviga liberamente la mappa 3D!")
 
-                # Aggiungi una colonna per la direzione cardinale per usarla nel tooltip
-                geo_df['aspect_direction'] = geo_df['aspect'].apply(get_aspect_direction)
+                # --- 1. SOLUZIONE "TOVAGLIA" con TerrainLayer e Immagine in Memoria ---
+                # Normalizziamo l'elevazione in un range 0-255 per creare un'immagine
+                min_elev, max_elev = np.nanmin(dem_data), np.nanmax(dem_data)
+                
+                # Formula per la codifica dell'elevazione in canali RGB (standard per TerrainLayer)
+                r, g, b = np.zeros_like(dem_data), np.zeros_like(dem_data), np.zeros_like(dem_data)
+                height_norm = (dem_data - min_elev)
+                r = np.floor(height_norm / 256)
+                g = np.floor(height_norm) % 256
+                b = np.floor((height_norm - np.floor(height_norm)) * 256)
+                
+                # Creiamo l'immagine PNG in memoria
+                rgb_array = np.dstack((r, g, b)).astype(np.uint8)
+                img = Image.fromarray(rgb_array, 'RGB')
+                buf = io.BytesIO()
+                img.save(buf, format='PNG')
+                elevation_image_data = buf.getvalue()
 
-                view_state = pdk.ViewState(
+                terrain_layer = pdk.Layer(
+                    "TerrainLayer",
+                    elevation_data=elevation_image_data,
+                    texture="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                    bounds=[bounds.left, bounds.bottom, bounds.right, bounds.top],
+                    elevation_decoder={"rScaler": 256, "gScaler": 1, "bScaler": 1/256, "offset": min_elev},
+                    z_scale=elevation_multiplier
+                )
+                
+                # --- LAYER PER I TOOLTIP (INVISIBILE) ---
+                # Usiamo i dati che abbiamo calcolato prima per mostrare le info
+                tooltip_df['aspect_direction'] = tooltip_df['aspect'].apply(get_aspect_direction)
+                tooltip_layer = pdk.Layer(
+                    'ScatterplotLayer',
+                    data=tooltip_df,
+                    get_position='[lon, lat]',
+                    get_fill_color=[0, 0, 0, 0], # Trasparente
+                    get_radius=50, # Raggio di "aggancio" del mouse
+                    pickable=True,
+                )
+
+                station_marker_layer = pdk.Layer('ScatterplotLayer', data=pd.DataFrame([{'lat': station_lat, 'lon': station_lon}]),get_position='[lon, lat]', get_fill_color='[255, 0, 0, 255]', get_radius=100)
+
+                # --- 2. SOLUZIONE "NAVIGAZIONE LIBERA" ---
+                initial_view_state = pdk.ViewState(
                     latitude=station_lat, longitude=station_lon,
                     zoom=11, pitch=50, bearing=0,
                 )
-                
-                # Calcolo della dimensione delle celle
-                cell_size_deg = (geo_df['lon'].max() - geo_df['lon'].min()) / geo_df['lon'].nunique()
-                cell_width_meters = cell_size_deg * 111000 * np.cos(np.radians(station_lat))
-
-                terrain_layer = pdk.Layer(
-                    'ColumnLayer',
-                    data=geo_df,
-                    get_position='[lon, lat]',
-                    get_elevation='elevation',
-                    elevation_scale=elevation_multiplier,
-                    extruded=True,
-                    radius=cell_width_meters / 2,
-                    n_sides=4,
-                    get_fill_color=f'[150, 255 - (elevation - {min_elev}) / ({max_elev - min_elev} + 1) * 255, 150, 250]',
-                    pickable=True
-                )
-                
-                station_marker_layer = pdk.Layer(
-                    'ScatterplotLayer',
-                    data=pd.DataFrame([{'lat': station_lat, 'lon': station_lon}]),
-                    get_position='[lon, lat]',
-                    get_fill_color='[255, 0, 0, 255]',
-                    get_radius=100,
-                )
-
-                # Tooltip aggiornato per mostrare l'esposizione
-                tooltip = {
-                    "html": "<b>Altitudine:</b> {elevation} m<br/><b>Esposizione:</b> {aspect_direction} ({aspect}°)",
-                    "style": {"backgroundColor": "steelblue", "color": "white"}
-                }
 
                 deck = pdk.Deck(
-                    layers=[terrain_layer, station_marker_layer],
-                    initial_view_state=view_state,
-                    map_style=None,
-                    tooltip=tooltip
+                    layers=[terrain_layer, tooltip_layer, station_marker_layer],
+                    initial_view_state=initial_view_state, # Usiamo initial_view_state
+                    tooltip={
+                        "html": "<b>Altitudine:</b> {elevation} m<br/><b>Esposizione:</b> {aspect_direction} ({aspect}°)",
+                        "style": {"backgroundColor": "steelblue", "color": "white"}
+                    }
                 )
                 st.pydeck_chart(deck)
 
     st.markdown("---")
+    
     
     # --- I GRAFICI DELLO STORICO RIMANGONO INVARIATI ---
     config_chart = {'toImageButtonOptions': {'format': 'png', 'scale': 2, 'filename': f'grafico_{station_code}'}, 'displaylogo': False}
