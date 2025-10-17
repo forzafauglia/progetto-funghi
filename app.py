@@ -202,7 +202,7 @@ def display_station_detail(df, station_code):
                 deck = pdk.Deck(
                     layers=[terrain_layer, station_marker_layer],
                     initial_view_state=view_state,
-                    map_style='mapbox://styles/mapbox/satellite-streets-v11',
+                    map_style=None,
                     tooltip=tooltip
                 )
                 st.pydeck_chart(deck)
