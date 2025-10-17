@@ -76,19 +76,16 @@ def create_map(tile, location=[43.8, 11.0], zoom=8):
     return folium.Map(location=location, zoom_start=zoom, tiles=tile)
 
 
-# --- NUOVA FUNZIONE HELPER per caricare e processare il DEM (MODIFICATA) ---
 @st.cache_data
 def load_and_process_dem(station_code, target_points=30000):
     """
-    Carica il file GeoTIFF e lo sottocampiona (downsamples) a un numero
-    target di punti per renderlo leggero e veloce per il web.
+    Carica il file GeoTIFF, lo sottocampiona e prepara i dati corretti per Pydeck.
     """
     filepath = os.path.join("ritagli", f"{station_code}.tif")
     if not os.path.exists(filepath):
-        return None, None
+        return None, None, None
 
     with rasterio.open(filepath) as src:
-        # Calcola il fattore di downsampling per raggiungere il target_points
         total_pixels = src.width * src.height
         if total_pixels > target_points:
             factor = (total_pixels / target_points) ** 0.5
@@ -97,18 +94,18 @@ def load_and_process_dem(station_code, target_points=30000):
         else:
             new_width, new_height = src.width, src.height
 
-        # Leggi i dati ricampionandoli a una risoluzione inferiore
         elevation_data = src.read(
             1,
             out_shape=(new_height, new_width),
-            resampling=Resampling.bilinear  # Metodo di ricampionamento di buona qualità
+            resampling=Resampling.bilinear
         )
         bounds = src.bounds
         height, width = elevation_data.shape
 
-    # Il resto della funzione rimane simile
+    # --- CORREZIONE #1: INVERSIONE LATITUDINE (Consiglio Amico) ---
+    # L'asse Y geografico cresce da Sud (bottom) a Nord (top).
     lons = np.linspace(bounds.left, bounds.right, width)
-    lats = np.linspace(bounds.top, bounds.bottom, height) # Modificato per correttezza
+    lats = np.linspace(bounds.bottom, bounds.top, height) # CORRETTO
     lons_grid, lats_grid = np.meshgrid(lons, lats)
 
     df_pydeck = pd.DataFrame({
@@ -116,13 +113,13 @@ def load_and_process_dem(station_code, target_points=30000):
         'lat': lats_grid.flatten(),
         'elevation': elevation_data.flatten()
     })
-    
-    # Rimuovi eventuali valori nulli che rasterio può inserire ai bordi
     df_pydeck.dropna(inplace=True)
-
-    cell_size_lon = (bounds.right - bounds.left) / width
     
-    return df_pydeck, cell_size_lon
+    # --- CORREZIONE #3: CALCOLO PIÙ ROBUSTO (Consiglio Amico) ---
+    cell_size_deg = (bounds.right - bounds.left) / width
+
+    # Restituiamo anche i dati di elevazione per il controllo
+    return df_pydeck, cell_size_deg, elevation_data
 
 # --- SOSTITUISCI QUESTA INTERA FUNZIONE NEL TUO CODICE ---
 def display_station_detail(df, station_code):
@@ -141,74 +138,58 @@ def display_station_detail(df, station_code):
 
     st.header(f"📈 Storico Dettagliato: {descriptive_name} ({station_code})")
 
-    # --- BLOCCO VISUALIZZAZIONE 3D (MODIFICATO) ---
     st.subheader("🌍 Visualizzazione 3D del Terreno Circostante")
 
-    # Aggiungiamo un moltiplicatore per l'elevazione per renderla più visibile
     elevation_multiplier = st.slider("Accentua rilievo 3D", min_value=1.0, max_value=10.0, value=2.5, step=0.5)
 
     if st.button("🗺️ Avvia/Aggiorna Visualizzazione 3D del Terreno (20x20 km)"):
         with st.spinner("Caricamento dati altimetrici e rendering della mappa 3D..."):
-            dem_df, cell_size_deg = load_and_process_dem(station_code)
+            dem_df, cell_size_deg, elevation_data = load_and_process_dem(station_code)
 
             if dem_df is None:
                 st.error(f"File DEM non trovato per la stazione {station_code}. Assicurati che 'ritagli/{station_code}.tif' esista.")
             else:
-                view_state = pdk.ViewState(
-                    latitude=station_lat,
-                    longitude=station_lon,
-                    zoom=11,
-                    pitch=50,
-                    bearing=0
-                )
-                
-                # Converti la dimensione della cella da gradi a metri (approssimazione)
-                # 1 grado di longitudine all'equatore ~ 111km. Lo adattiamo alla latitudine.
+                # --- CORREZIONE #4: CONTROLLO DATI (Consiglio Amico) ---
+                min_elev, max_elev = np.nanmin(elevation_data), np.nanmax(elevation_data)
+                st.info(f"Dati altimetrici caricati. Altitudine Min: **{min_elev:.2f} m**, Max: **{max_elev:.2f} m**.")
+
+                if min_elev == max_elev:
+                    st.warning("Attenzione: il rilievo del terreno è piatto. La mappa 3D potrebbe non mostrare variazioni.")
+
+                view_state = pdk.ViewState(latitude=station_lat, longitude=station_lon, zoom=11, pitch=50, bearing=0)
                 cell_size_meters = cell_size_deg * 111000 * np.cos(np.radians(station_lat))
 
                 terrain_layer = pdk.Layer(
-                    'GridLayer',
-                    data=dem_df,
-                    get_position='[lon, lat]',
-                    get_elevation='elevation',
-                    elevation_scale=elevation_multiplier, # USA IL MOLTIPLICATORE
-                    extruded=True,
-                    cell_size=cell_size_meters,
-                    pickable=True,
-                    # Colore basato sull'altitudine (da verde basso a marrone/bianco alto)
-                    color_range=[
-                        [1, 152, 189],
-                        [73, 227, 206],
-                        [216, 254, 181],
-                        [254, 237, 177],
-                        [254, 173, 84],
-                        [209, 55, 78]
-                    ],
+                    'GridLayer', data=dem_df, get_position='[lon, lat]', get_elevation='elevation',
+                    elevation_scale=elevation_multiplier, extruded=True, cell_size=cell_size_meters,
+                    pickable=True, color_range=[[1, 152, 189], [73, 227, 206], [216, 254, 181], [254, 237, 177], [254, 173, 84], [209, 55, 78]]
                 )
 
                 station_marker_layer = pdk.Layer(
-                    'ScatterplotLayer',
-                    data=pd.DataFrame([{'lat': station_lat, 'lon': station_lon}]),
-                    get_position='[lon, lat]',
-                    get_fill_color='[255, 0, 0, 255]',
-                    get_radius=100,
+                    'ScatterplotLayer', data=pd.DataFrame([{'lat': station_lat, 'lon': station_lon}]),
+                    get_position='[lon, lat]', get_fill_color='[255, 0, 0, 255]', get_radius=100,
                 )
 
-                tooltip = {
-                    "html": "<b>Altitudine:</b> {elevation} m",
-                    "style": {"backgroundColor": "steelblue", "color": "white"}
+                tooltip = {"html": "<b>Altitudine:</b> {elevation} m", "style": {"backgroundColor": "steelblue", "color": "white"}}
+
+                # --- CORREZIONE #2: RIATTIVARE MAPPA DI SFONDO (Consiglio Amico) ---
+                # Stile per la mappa satellitare gratuita di ESRI (alternativa a Mapbox)
+                SATELLITE_STYLE = {
+                    "version": 8,
+                    "sources": {"esri-satellite": {"type": "raster", "tiles": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], "tileSize": 256}},
+                    "layers": [{"id": "satellite-layer", "type": "raster", "source": "esri-satellite"}]
                 }
 
                 deck = pdk.Deck(
                     layers=[terrain_layer, station_marker_layer],
                     initial_view_state=view_state,
-                    map_style=None,
+                    map_style=SATELLITE_STYLE, # CORRETTO
                     tooltip=tooltip
                 )
                 st.pydeck_chart(deck)
 
     st.markdown("---")
-
+    
     # --- I GRAFICI DELLO STORICO RIMANGONO INVARIATI ---
     config_chart = {'toImageButtonOptions': {'format': 'png', 'scale': 2, 'filename': f'grafico_{station_code}'}, 'displaylogo': False}
     end_date_default = df_station['DATA'].max()
