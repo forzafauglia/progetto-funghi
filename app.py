@@ -75,17 +75,21 @@ def load_and_prepare_data(url: str):
 def create_map(tile, location=[43.8, 11.0], zoom=8):
     return folium.Map(location=location, zoom_start=zoom, tiles=tile)
 
-
+# --- SOSTITUISCI QUESTA FUNZIONE NEL TUO CODICE ---
 @st.cache_data
 def load_and_process_dem(station_code, target_points=30000):
     """
-    Carica il file GeoTIFF, lo sottocampiona e prepara i dati corretti per Pydeck.
+    Carica il file GeoTIFF, gestisce i valori NoData, lo sottocampiona
+    e prepara i dati corretti per Pydeck.
     """
     filepath = os.path.join("ritagli", f"{station_code}.tif")
     if not os.path.exists(filepath):
         return None, None, None
 
     with rasterio.open(filepath) as src:
+        # --- CORREZIONE #1: GESTIONE DEI VALORI NODATA (-9999) ---
+        nodata_value = src.nodata  # Legge il valore NoData dal file (es. -9999)
+        
         total_pixels = src.width * src.height
         if total_pixels > target_points:
             factor = (total_pixels / target_points) ** 0.5
@@ -102,10 +106,12 @@ def load_and_process_dem(station_code, target_points=30000):
         bounds = src.bounds
         height, width = elevation_data.shape
 
-    # --- CORREZIONE #1: INVERSIONE LATITUDINE (Consiglio Amico) ---
-    # L'asse Y geografico cresce da Sud (bottom) a Nord (top).
+        # Se esiste un valore NoData, sostituiscilo con NaN (Not a Number)
+        if nodata_value is not None:
+            elevation_data[elevation_data == nodata_value] = np.nan
+
     lons = np.linspace(bounds.left, bounds.right, width)
-    lats = np.linspace(bounds.bottom, bounds.top, height) # CORRETTO
+    lats = np.linspace(bounds.bottom, bounds.top, height)
     lons_grid, lats_grid = np.meshgrid(lons, lats)
 
     df_pydeck = pd.DataFrame({
@@ -113,12 +119,12 @@ def load_and_process_dem(station_code, target_points=30000):
         'lat': lats_grid.flatten(),
         'elevation': elevation_data.flatten()
     })
+    
+    # Ora .dropna() rimuoverà sia i punti ai bordi sia i punti NoData (-9999)
     df_pydeck.dropna(inplace=True)
     
-    # --- CORREZIONE #3: CALCOLO PIÙ ROBUSTO (Consiglio Amico) ---
     cell_size_deg = (bounds.right - bounds.left) / width
 
-    # Restituiamo anche i dati di elevazione per il controllo
     return df_pydeck, cell_size_deg, elevation_data
 
 # --- SOSTITUISCI QUESTA INTERA FUNZIONE NEL TUO CODICE ---
@@ -144,14 +150,13 @@ def display_station_detail(df, station_code):
 
     if st.button("🗺️ Avvia/Aggiorna Visualizzazione 3D del Terreno (20x20 km)"):
         with st.spinner("Caricamento dati altimetrici e rendering della mappa 3D..."):
-            dem_df, cell_size_deg, elevation_data = load_and_process_dem(station_code)
+            dem_df, cell_size_deg, raw_elevation_data = load_and_process_dem(station_code)
 
-            if dem_df is None:
-                st.error(f"File DEM non trovato per la stazione {station_code}. Assicurati che 'ritagli/{station_code}.tif' esista.")
+            if dem_df is None or dem_df.empty:
+                st.error(f"File DEM non trovato o senza dati validi per la stazione {station_code}.")
             else:
-                # --- CORREZIONE #4: CONTROLLO DATI (Consiglio Amico) ---
-                min_elev, max_elev = np.nanmin(elevation_data), np.nanmax(elevation_data)
-                st.info(f"Dati altimetrici caricati. Altitudine Min: **{min_elev:.2f} m**, Max: **{max_elev:.2f} m**.")
+                min_elev, max_elev = dem_df['elevation'].min(), dem_df['elevation'].max()
+                st.info(f"Dati altimetrici validi caricati. Altitudine Min: **{min_elev:.2f} m**, Max: **{max_elev:.2f} m**.")
 
                 if min_elev == max_elev:
                     st.warning("Attenzione: il rilievo del terreno è piatto. La mappa 3D potrebbe non mostrare variazioni.")
@@ -172,18 +177,11 @@ def display_station_detail(df, station_code):
 
                 tooltip = {"html": "<b>Altitudine:</b> {elevation} m", "style": {"backgroundColor": "steelblue", "color": "white"}}
 
-                # --- CORREZIONE #2: RIATTIVARE MAPPA DI SFONDO (Consiglio Amico) ---
-                # Stile per la mappa satellitare gratuita di ESRI (alternativa a Mapbox)
-                SATELLITE_STYLE = {
-                    "version": 8,
-                    "sources": {"esri-satellite": {"type": "raster", "tiles": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], "tileSize": 256}},
-                    "layers": [{"id": "satellite-layer", "type": "raster", "source": "esri-satellite"}]
-                }
-
+                # --- CORREZIONE #2: USARE UNA MAPPA BASE CHE NON RICHIEDE TOKEN ---
                 deck = pdk.Deck(
                     layers=[terrain_layer, station_marker_layer],
                     initial_view_state=view_state,
-                    map_style=SATELLITE_STYLE, # CORRETTO
+                    map_style=None, # Usa la mappa OSM/Carto di default, senza errori
                     tooltip=tooltip
                 )
                 st.pydeck_chart(deck)
