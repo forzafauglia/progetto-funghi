@@ -14,6 +14,11 @@ import os # --- NUOVO IMPORTO --- per controllare i percorsi dei file
 import pydeck as pdk # --- NUOVO IMPORTO --- per le mappe 3D
 import rasterio # --- NUOVO IMPORTO --- per leggere i file GeoTIFF
 from rasterio.enums import Resampling
+from PIL import Image
+import io
+
+
+
 
 # --- 2. CONFIGURAZIONE CENTRALE E FUNZIONI DI BASE ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRxitMYpUqvX6bxVaukG01lJDC8SUfXtr47Zv5ekR1IzfR1jmhUilBsxZPJ8hrktVHrBh6hUUWYUtox/pub?output=csv"
@@ -75,9 +80,6 @@ def load_and_prepare_data(url: str):
 def create_map(tile, location=[43.8, 11.0], zoom=8):
     return folium.Map(location=location, zoom_start=zoom, tiles=tile)
 
-# --- NUOVI IMPORT PER LA SOLUZIONE TerrainLayer ---
-from PIL import Image
-import io
 
 # --- NUOVA FUNZIONE HELPER PER CONVERTIRE GRADI IN DIREZIONE CARDINALE ---
 def get_aspect_direction(degrees):
