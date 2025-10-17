@@ -1,0 +1,4 @@
+cd /c/Users/afantei/progetto-funghi
+
+
+streamlit run app.py
