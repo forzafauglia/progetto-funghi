@@ -133,6 +133,7 @@ def load_multiband_data(station_code, target_points=40000):
     return df, bounds
 
 # --- SOSTITUISCI QUESTA INTERA FUNZIONE NEL TUO CODICE ---
+# --- SOSTITUISCI QUESTA INTERA FUNZIONE NEL TUO CODICE ---
 def display_station_detail(df, station_code):
     if st.button("⬅️ Torna alla Mappa Riepilogativa"):
         st.query_params.clear()
@@ -158,18 +159,17 @@ def display_station_detail(df, station_code):
             if tooltip_df is None or tooltip_df.empty:
                 st.error(f"File multibanda non trovato o senza dati validi per {station_code}.")
             else:
-                st.info(f"Dati caricati. Tieni premuto il tasto destro del mouse e muovi per ruotare e inclinare la mappa.")
+                st.info(f"Dati caricati. Usa due dita per inclinare/ruotare la mappa. Su PC, tieni premuto il tasto destro del mouse.")
 
-                # --- PASSO 1: Incolla il tuo URL di base qui ---
                 BASE_URL = "https://raw.githubusercontent.com/forzafauglia/progetto-funghi/main/multibanda/"
                 file_url = f"{BASE_URL}{station_code}.tif"
                 
                 terrain_layer = pdk.Layer(
                     "TerrainLayer",
+                    id="terrain-layer", # Aggiungere un ID è buona pratica
                     elevation_data=file_url,
                     texture="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
                     bounds=[bounds.left, bounds.bottom, bounds.right, bounds.top],
-                    # Decoder per file a 2 bande: la Banda 1 (canale Rosso) è l'elevazione.
                     elevation_decoder={"rScaler": 1, "gScaler": 0, "bScaler": 0, "offset": 0},
                     z_scale=elevation_multiplier
                 )
@@ -192,7 +192,9 @@ def display_station_detail(df, station_code):
 
                 deck = pdk.Deck(
                     layers=[terrain_layer, tooltip_layer, station_marker_layer],
-                    initial_view_state=initial_view_state, # Abilita la navigazione libera
+                    initial_view_state=initial_view_state,
+                    # --- LA MODIFICA CHIAVE PER SBLOCCARE LA NAVIGAZIONE ---
+                    controller=True, 
                     tooltip={
                         "html": "<b>Altitudine:</b> {elevation} m<br/><b>Esposizione:</b> {aspect_direction} ({aspect:.0f}°)",
                         "style": {"backgroundColor": "steelblue", "color": "white"}
