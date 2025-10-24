@@ -226,16 +226,20 @@ def display_station_detail(df, station_code):
     # --- LOGICA MAPPA ---
     # Creiamo una mappa di base usando il tile selezionato
     tile_to_use = "OpenStreetMap"
+    attr_to_use = "© OpenStreetMap contributors" # Attribuzione di default
+
     if map_type == "Mappa Topografica":
-        tile_to_use = 'https://tile.opentopomap.org/{z}/{x}/{y}.png'
+        tile_to_use = 'https://tile.opentopomap.org/{z}/{x}/{y}.png' # Corretto l'URL
+        attr_to_use = 'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)'
     elif map_type == "Mappa Satellitare":
         tile_to_use = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-    
+        attr_to_use = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+
     m = folium.Map(
         location=[station_lat, station_lon], 
         zoom_start=13, 
         tiles=tile_to_use, 
-        attr='Map data © OpenStreetMap contributors' if 'OpenStreetMap' in str(tile_to_use) else ''
+        attr=attr_to_use  # <-- Ora usiamo sempre l'attribuzione corretta
     )
 
     # Aggiungiamo i marker
